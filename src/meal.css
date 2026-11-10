@@ -1,0 +1,1 @@
+.meal-editors{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:26px}.meal-editors label{display:block;color:#aaa49d;font-size:10px;font-weight:700}.meal-editors select{display:block;width:100%;margin-top:8px;border:1px solid #e5e0da;border-radius:6px;padding:8px 6px;background:#fff;color:#494844;font-size:11px}

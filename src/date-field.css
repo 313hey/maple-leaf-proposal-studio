@@ -1,0 +1,5 @@
+.short-date-field{display:flex;align-items:center;gap:5px;width:100%;margin-top:8px;padding:0 8px;border:1px solid #e5e0da;border-radius:7px;background:#fff;color:#383b38}
+.short-date-field:focus-within{border-color:#8a2018}
+.short-date-field select{width:auto;min-width:50px;margin:0;padding:10px 5px;border:0;border-radius:0;background:transparent;color:#383b38;font-size:12px;outline:none}
+.short-date-field select:first-child{min-width:53px}
+.short-date-field span{color:#aaa49d;font-size:12px}

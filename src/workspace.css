@@ -1,0 +1,81 @@
+/* Workspace controls only. Customer proposal pages retain their existing design. */
+.studio-shell>.studio-rail{display:flex;width:76px;padding:20px 8px;background:#faf9f7;flex:none}
+.studio-rail .brand{padding:0 0 25px}
+.studio-rail .brand .brand-logo{width:60px;max-width:100%;height:auto}
+.studio-rail .nav{display:flex;flex-direction:column;gap:6px;font-size:10px;padding:13px 2px;margin-bottom:5px;text-align:center;justify-content:center}
+.studio-shell .topbar{gap:14px;height:66px;padding:0 22px}
+.project-switcher{position:relative;min-width:0;flex:1;max-width:350px}
+.project-switcher>summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;font-size:13px;color:#3b3835;padding:10px 0}
+.project-switcher>summary::-webkit-details-marker{display:none}
+.project-switcher strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.project-switcher svg{flex:none;color:#989089}
+.project-switcher>div{position:absolute;left:0;top:100%;z-index:50;min-width:260px;max-width:340px;max-height:70vh;overflow:auto;background:#fff;border:1px solid #e8e2dc;border-radius:8px;box-shadow:0 8px 30px #2222;padding:8px}
+.project-switcher>div>span{display:block;color:#aaa;font-size:10px;padding:8px}
+.project-switcher button{display:flex;gap:6px;align-items:center;width:100%;border:0;background:none;color:#665e58;text-align:left;padding:10px;border-radius:4px;font-size:12px;overflow-wrap:anywhere}
+.project-switcher button:hover,.project-switcher button.current{background:#f6f2ee;color:#8a2018}
+.project-switcher button:nth-last-child(2){border-top:1px solid #eee;margin-top:5px;border-radius:0}
+.workspace-modes{display:flex;gap:2px;background:#f4f2ef;padding:3px;border-radius:6px;flex:none}
+.workspace-modes button{display:flex;align-items:center;gap:6px;background:none;border:0;border-radius:4px;padding:8px 10px;color:#969089;font-size:11px;white-space:nowrap}
+.workspace-modes button[aria-pressed=true]{background:white;color:#5d4034;box-shadow:0 1px 3px #2221}
+.workspace-modes button:disabled{opacity:.35;cursor:default}
+.studio-shell .top-actions{margin-left:auto;gap:14px}
+.studio-shell .chapter-nav{width:154px;padding:24px 12px}
+.studio-shell .editor{width:420px;min-width:350px;max-width:60%;padding:30px 28px 60px}
+.workspace.wide-editor>.editor{width:51%;min-width:420px}
+.workspace.mode-edit>.preview{display:none}
+.workspace.mode-edit>.editor{display:block;flex:1;width:auto!important;min-width:0;max-width:none!important;resize:none;padding:32px clamp(24px,5vw,80px) 60px}
+.workspace.mode-edit>.editor>.editor-card{max-width:1100px;margin:0 auto}
+.workspace.mode-edit>.editor>.sample-note,.workspace.mode-edit>.editor>.duration-notice{max-width:1100px;margin-left:auto;margin-right:auto}
+.workspace.mode-split>.editor{display:block}
+.workspace.mode-split>.preview{display:flex;width:auto;min-width:0}
+.workspace.mode-preview>.editor,.workspace.mode-preview>.chapter-nav,.studio-shell.mode-preview>.studio-rail{display:none}
+.workspace.mode-preview>.preview{display:flex;flex:1;width:100%}
+.studio-shell.mode-preview .mobile-main-menu{display:block}
+.workspace.mode-preview .preview-toolbar{height:56px}
+.workspace.mode-preview .canvas-scroll{padding:24px 32px 40px}
+.create-custom{margin-top:24px;padding-top:16px;border-top:1px solid #eee6df}
+.create-custom summary{cursor:pointer;color:#7e746a;font-size:12px}
+.create-custom small{float:right;font-size:10px;color:#aaa}
+.content-library{width:min(560px,100%);background:white;border-radius:10px;padding:28px;max-height:90vh;overflow:auto;color:#635c55}
+.content-library header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.content-library header span{color:#a49b93;font-size:9px;letter-spacing:.15em}
+.content-library h2{font-size:22px;font-weight:500;margin:8px 0 0}
+.content-library button{border:0;background:none;color:inherit;cursor:pointer}
+.content-library .library-entry{display:flex;align-items:center;width:100%;gap:15px;padding:20px 0;text-align:left;border-top:1px solid #eee7df;border-bottom:1px solid #eee7df}
+.library-entry>svg{color:#8a2018;flex:none}
+.library-entry strong,.library-entry small{display:block}
+.library-entry strong{font-size:14px;font-weight:500;color:#39332f}
+.library-entry small{font-size:11px;color:#a29a92;margin-top:7px;line-height:1.5}
+.library-entry>span:last-child{margin-left:auto;white-space:nowrap;font-size:11px;color:#8a2018}
+.library-fees{padding:22px 0;border-bottom:1px solid #eee7df}
+.library-fees summary{cursor:pointer;display:flex;gap:14px;align-items:center;font-size:14px}
+.library-fees summary svg{color:#8a2018}
+.library-fees p{font-size:11px;color:#aaa;margin:18px 0 10px}
+.library-fees button{display:flex;justify-content:space-between;width:100%;padding:12px 8px;font-size:12px;text-align:left}
+.library-fees button:hover{background:#faf8f5}
+.library-fees button span{font-size:10px;color:#9d7c6d}
+.library-scope{font-size:11px;line-height:1.8;color:#aaa;margin:22px 0 0}
+.library-scope strong{font-weight:500;color:#91887e}
+.content-fee-picker .import-backdrop{z-index:180}
+@media(max-width:1150px){.studio-shell .topbar{gap:10px;padding:0 16px}.workspace-modes button{padding:8px}.workspace-modes button svg{display:none}.studio-shell .save-state{font-size:10px}.studio-shell .chapter-nav{width:132px;padding:22px 9px}.studio-shell .editor{width:370px;min-width:310px;padding:26px 22px}.workspace.wide-editor>.editor{min-width:350px;width:48%}}
+@media(max-width:899px){.studio-shell>.studio-rail{display:none}.studio-shell .mobile-main-menu{display:block}.studio-shell .topbar{height:auto;min-height:100px;flex-wrap:wrap;padding:10px 15px;gap:8px}.project-switcher{flex:1;max-width:calc(100% - 190px)}.studio-shell .top-actions{order:1}.workspace-modes{order:2;width:100%;justify-content:center}.workspace-modes button{padding:7px 15px}.studio-shell .chapter-nav{width:130px;padding:20px 8px}.workspace.mode-edit>.editor{width:auto;min-width:0;padding:24px 20px}.workspace.mode-preview>.preview{display:flex;width:100%}.workspace.mode-preview .canvas-scroll{padding:15px}.workspace.mode-preview .preview-toolbar{height:56px}.studio-shell .save-state{font-size:9px}.content-library{padding:23px}}
+@media(max-width:520px){.studio-shell .chapter-nav{width:105px;padding:18px 5px}.studio-shell .chapter-nav button{font-size:11px;padding:12px 6px}.studio-shell .top-actions{gap:7px}.studio-shell .save-state{display:none!important}.project-switcher{max-width:calc(100% - 145px)}.project-switcher strong{font-size:12px}.workspace.mode-edit>.editor{padding:22px 15px}.workspace-modes button{padding:7px 13px}.studio-shell .export-primary{font-size:11px;padding:9px 10px}.preview-controls select{max-width:115px}.library-entry>span:last-child{display:none}}
+/* Course controls are separate from the unchanged proposal table styles. */
+.class-column-config{display:flex;align-items:center;gap:5px;margin-bottom:7px}
+.class-column-config>input{flex:1;min-width:0;padding:8px;border:1px solid #e7e0d9;border-radius:4px;font-size:12px}
+.class-column-config button,.class-copy-day button{border:1px solid #e6ddd5;border-radius:4px;background:white;color:#8a2018;padding:7px;font-size:11px}
+.class-column-config button:disabled,.class-copy-day button:disabled,.class-add:disabled{opacity:.35;cursor:default}
+.class-copy-day>div{display:flex;align-items:end;gap:12px;flex-wrap:wrap}
+.class-copy-day label{font-size:11px;color:#999;display:flex;flex-direction:column;gap:6px;min-width:85px;flex:1}
+.class-copy-day select{border:1px solid #e3dad2;border-radius:4px;background:white;padding:8px;max-width:100%;color:#625a54;font-size:12px}
+.sample-class-editor .class-cell-grid{overflow:auto;padding-bottom:5px}
+.class-row-menu{position:relative}
+.class-row-menu summary{display:flex;cursor:pointer;color:#888;padding:5px;list-style:none}
+.class-row-menu summary::-webkit-details-marker{display:none}
+.class-row-menu>div{position:absolute;right:0;top:100%;display:block!important;z-index:12;min-width:145px;background:#fff;padding:5px;border:1px solid #eee4db;box-shadow:0 6px 20px #2222;border-radius:5px}
+.class-row-menu>div button{display:block;width:100%;text-align:left;font-size:11px;padding:10px}
+.class-row-menu>div button:hover{background:#faf7f3}
+.class-bottom-actions{display:flex;align-items:baseline;gap:24px;flex-wrap:wrap}
+.class-bottom-actions>.class-add{background:#8a2018;color:white;border-color:#8a2018}
+.class-notes-settings{flex:1;min-width:180px}
+.class-notes label>button{align-self:flex-start;background:none;border:0;color:#9b8275;font-size:10px;padding:4px 0}
