@@ -40,10 +40,14 @@ import './brand.css';
 import './workspace.css';
 import {ContentLibrary} from './ContentLibrary';
 import {ClassTemplateLibrary,SaveClassTemplateDialog} from './ClassTemplateLibrary';
+import {CloudSyncPanel} from './CloudSyncPanel';
+import {cloudEnabled,subscribeCloudTable} from './cloud-store';
+import {readImage} from './image-utils';
 import {hasClassContent,type SampleClassData} from './sample-class-data';
 import './class-library.css';
 import './asset-library.css';
 import './attraction-pages.css';
+import './cloud-sync.css';
 const NO_ATTRACTIONS:AttractionSnapshot[]=[];
 
 type Section = 'Overview' | 'Highlights' | 'Attractions' | 'Learning objectives' | 'Daily itinerary' | 'Sample class' | 'Pricing & details';
@@ -131,10 +135,18 @@ function App() {
     if(!hydrated)return;
     let active=true;
     setSaveStatus('saving');
-    setProjects(current=>[project,...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
-    saveProject(project).then(()=>{if(active)setSaveStatus('saved')}).catch(()=>{if(active)setSaveStatus('error')});
-    return ()=>{active=false};
+    const timer=window.setTimeout(()=>{
+      setProjects(current=>[project,...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
+      saveProject(project).then(()=>{if(active)setSaveStatus('saved')}).catch(()=>{if(active)setSaveStatus('error')});
+    },cloudEnabled?350:0);
+    return ()=>{active=false;window.clearTimeout(timer)};
   },[project,hydrated]);
+  useEffect(()=>{
+    if(!hydrated||!cloudEnabled)return;
+    let active=true;
+    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadProjects().then(stored=>{if(!active)return;setProjects(stored);const latest=stored.find(item=>item.id===project.id);if(latest&&latest.updatedAt>project.updatedAt&&saveStatus==='saved')setProject(latest)}).catch(()=>{if(active)setSaveStatus('error')})});
+    return()=>{active=false;unsubscribe()};
+  },[hydrated,project.id,project.updatedAt,saveStatus]);
   const change = (fn: () => void) => fn();
   const activateProject=(next:ProjectData)=>{
     if(projectMenu.current)projectMenu.current.open=false;
@@ -168,7 +180,7 @@ function App() {
       if(id===project.id){const next=remaining[0]||blankProject();if(!remaining.length)setProjects([next]);activateProject(next);}
     } catch {setSaveStatus('error');window.alert('删除失败，请重试。');}
   };
-  const upload = (file: File | undefined, setter: (url: string) => void) => { if (!file) return; const reader = new FileReader(); reader.onload = () => change(() => setter(String(reader.result))); reader.readAsDataURL(file); };
+  const upload = (file: File | undefined, setter: (url: string) => void) => { if (!file) return; void readImage(file).then(image=>change(()=>setter(image))).catch(error=>window.alert(error instanceof Error?error.message:'图片读取失败')); };
   const resizeDays = (count:number)=>{if(!Number.isInteger(count)||count<1||count>90||count===days.length)return;const archive=[...days,...dayArchive.current.slice(days.length)];dayArchive.current=archive;setProject(current=>({...current,archivedDays:archive,days:Array.from({length:count},(_,i)=>current.days[i]??archive[i]??{title:'',morning:'',afternoon:'',evening:''}),nights:current.nights===current.days.length-1?count-1:Math.min(current.nights,count),updatedAt:new Date().toISOString()}));setSelectedDay(i=>Math.min(i,count-1));setDurationNotice('项目天数已变化；报价及条款均已保留，请重新核对价格、住宿和餐食。');};
   const importDays=(input:ItineraryImport,mode:ImportMode)=>{const updated=applyItineraryImport(project,input,mode);dayArchive.current=updated.archivedDays;setProject(updated);setSelectedDay(0);setItineraryMode('table');if(updated.days.length!==days.length)setDurationNotice('行程天数已变化；报价及全部费用条款均已保留，请重新核对。');};
   const restoreProjects=async(items:ProjectData[])=>{await saveProjects(items);const stored=await loadProjects();setProjects(stored);const updated=items.find(p=>p.id===project.id);if(updated)activateProject(updated);};
@@ -263,7 +275,7 @@ function App() {
         </section>
       </div>
     </main>
-    {settingsOpen&&<div className="studio-settings-backdrop" onClick={()=>setSettingsOpen(false)}><section className="studio-settings" role="dialog" aria-modal="true" aria-label="设置" onClick={event=>event.stopPropagation()}><header><h2>设置与数据</h2><button onClick={()=>setSettingsOpen(false)}>关闭</button></header><h3>本地保存</h3><p>方案和景点保存在当前浏览器，不会自动同步到其他电脑。等待「已自动保存」后再关闭页面。</p><details><summary>项目备份与恢复</summary><ProjectBackupPanel projects={[project,...projects.filter(p=>p.id!==project.id)]} onRestore={restoreProjects}/></details><h3>资源库备份</h3><p>独立课表库请在「资源库 → 课程表模板 → 更多」备份。项目备份只包含项目内课表副本。</p><button onClick={()=>{setSettingsOpen(false);setClassLibraryOpen(true)}}>打开课表模板库</button><h3>景点资源备份</h3><p>在景点库右上角「更多」中导出或恢复包含图片的完整资源备份。恢复时会更新同 ID 资料。</p><button onClick={()=>{setSettingsOpen(false);setReplaceAttractionId(null);setLibraryMode('manage');setLibraryOpen(true)}}>打开景点资源库</button><details><summary>当前能力说明</summary><p>内容板块可在章节导航底部管理，隐藏不删除内容。数据保存在本地，尚无云端同步。</p><p>顶部可切换专注编辑、分栏预览和全屏预览；分栏时可拖动编辑区右边缘调整宽度。图片与文案较长时，请在导出前检查分页。</p></details></section></div>}
+    {settingsOpen&&<div className="studio-settings-backdrop" onClick={()=>setSettingsOpen(false)}><section className="studio-settings" role="dialog" aria-modal="true" aria-label="设置" onClick={event=>event.stopPropagation()}><header><h2>设置与数据</h2><button onClick={()=>setSettingsOpen(false)}>关闭</button></header><CloudSyncPanel/><details><summary>项目备份与恢复</summary><ProjectBackupPanel projects={[project,...projects.filter(p=>p.id!==project.id)]} onRestore={restoreProjects}/></details><h3>资源库备份</h3><p>独立课表库请在「资源库 → 课程表模板 → 更多」备份。项目备份只包含项目内课表副本。</p><button onClick={()=>{setSettingsOpen(false);setClassLibraryOpen(true)}}>打开课表模板库</button><h3>景点资源备份</h3><p>在景点库右上角「更多」中导出或恢复包含图片的完整资源备份。恢复时会更新同 ID 资料。</p><button onClick={()=>{setSettingsOpen(false);setReplaceAttractionId(null);setLibraryMode('manage');setLibraryOpen(true)}}>打开景点资源库</button><details><summary>当前能力说明</summary><p>内容板块可在章节导航底部管理，隐藏不删除内容。</p><p>顶部可切换专注编辑、分栏预览和全屏预览；分栏时可拖动编辑区右边缘调整宽度。图片与文案较长时，请在导出前检查分页。</p></details></section></div>}
     {attractionLayout.probe}
     <div className="export-stage" ref={exportStage} data-attraction-layout-ready={attractionLayout.ready} aria-hidden="true">{orderedPages.map(page=><div key={page.key} data-section={page.section} className={`export-page ${page.landscape?'landscape':''}`}>{page.content}</div>)}</div>
     {createOpen&&<CreateProjectDialog onClose={()=>setCreateOpen(false)} onCreate={finishCreate}/>}

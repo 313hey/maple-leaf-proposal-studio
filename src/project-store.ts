@@ -3,6 +3,7 @@ import type { Clause, ClauseKind, ClauseLanguage } from './clauses';
 import type { Highlight } from './proposal-types';
 import type { SampleClassData } from './sample-class';
 import type { AttractionSnapshot } from './attractions-types';
+import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
 
 export type ProjectData = {
   id:string;
@@ -77,13 +78,21 @@ export function database():Promise<IDBDatabase> {
   return connection;
 }
 
-export async function loadProjects():Promise<ProjectData[]> {
+export async function loadLocalProjects():Promise<ProjectData[]> {
   const db=await database();
   return new Promise((resolve,reject)=>{
     const request=db.transaction(STORE,'readonly').objectStore(STORE).getAll();
     request.onsuccess=()=>resolve((request.result as ProjectData[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
     request.onerror=()=>reject(request.error||new Error('无法读取项目'));
   });
+}
+export async function loadProjects():Promise<ProjectData[]> {
+  if(!cloudEnabled)return loadLocalProjects();
+  const remote=await loadCloudRecords<ProjectData>('studio_projects');
+  if(!remote.length)return loadLocalProjects();
+  if(cloudMigrationComplete()){await saveLocalProjects(remote,true);return remote.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));}
+  const merged=new Map((await loadLocalProjects()).map(item=>[item.id,item]));for(const item of remote)merged.set(item.id,item);
+  return [...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
 }
 
 async function writeProject(project:ProjectData):Promise<void> {
@@ -97,7 +106,7 @@ async function writeProject(project:ProjectData):Promise<void> {
   });
 }
 
-export function saveProject(project:ProjectData):Promise<void> {return enqueue(()=>writeProject(project));}
+export function saveProject(project:ProjectData):Promise<void> {return enqueue(async()=>{await writeProject(project);if(cloudEnabled)await saveCloudRecords('studio_projects',[project]);});}
 
 async function eraseProject(id:string):Promise<void> {
   const db=await database();
@@ -109,9 +118,10 @@ async function eraseProject(id:string):Promise<void> {
   });
 }
 
-export function removeProject(id:string):Promise<void> {return enqueue(()=>eraseProject(id));}
+export function removeProject(id:string):Promise<void> {return enqueue(async()=>{if(cloudEnabled)await deleteCloudRecords('studio_projects',[id]);await eraseProject(id);});}
 
 export function getActiveProjectId():string|null {return localStorage.getItem(ACTIVE_KEY);}
 export function setActiveProjectId(id:string):void {localStorage.setItem(ACTIVE_KEY,id);}
 
-export function saveProjects(items:ProjectData[]):Promise<void>{return enqueue(async()=>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');for(const item of items)tx.objectStore(STORE).put(item);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});});}
+async function saveLocalProjects(items:ProjectData[],replace=false):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');const store=tx.objectStore(STORE);if(replace)store.clear();for(const item of items)store.put(item);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});}
+export function saveProjects(items:ProjectData[]):Promise<void>{return enqueue(async()=>{await saveLocalProjects(items);if(cloudEnabled)await saveCloudRecords('studio_projects',items);});}

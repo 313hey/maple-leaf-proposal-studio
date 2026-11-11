@@ -6,6 +6,7 @@ import {attractionNameKey,findAttractionDuplicates,type AttractionMatch} from '.
 import {AttractionDuplicateNotice} from './AttractionDuplicateNotice';
 import {AttractionFields} from './AttractionFields';
 import {QuickAddDialog} from './QuickAddDialog';
+import {subscribeCloudTable} from './cloud-store';
 export {AttractionFields} from './AttractionFields';
 import './attractions.css';
 function download(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),60000)}
@@ -14,7 +15,7 @@ export function AttractionsLibrary({onClose,onAdd,mode='manage'}:{onClose:()=>vo
  const [duplicate,setDuplicate]=useState<{match:AttractionMatch;nameKey:string;again:boolean}|null>(null);
  const [items,setItems]=useState<Attraction[]>([]),[selected,setSelected]=useState<string[]>([]),[editing,setEditing]=useState<Attraction|null>(null),[batch,setBatch]=useState(false),[bulk,setBulk]=useState(false),[query,setQuery]=useState(''),[city,setCity]=useState(''),[category,setCategory]=useState(''),[message,setMessage]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[mediaBusy,setMediaBusy]=useState(false);
  const refresh=async()=>setItems(await loadAttractions());
- useEffect(()=>{void refresh().catch(e=>setError(String(e)))},[]);
+ useEffect(()=>{void refresh().catch(e=>setError(String(e)));return subscribeCloudTable('studio_attractions',()=>{void refresh().catch(e=>setError(String(e)))})},[]);
  const visible=items.filter(a=>[a.nameEn,a.nameZh,a.city,a.category,a.descriptionEn,a.descriptionZh,a.learningEn,a.learningZh,...a.tags].join(' ').toLowerCase().includes(query.trim().toLowerCase())&&(!city||a.city===city)&&(!category||a.category===category));
  const isNew=Boolean(editing&&!items.some(a=>a.id===editing.id));
  const back=()=>{if(busy||mediaBusy)return;if(editing&&JSON.stringify(editing)!==editingBase.current&&!window.confirm('返回景点库？尚未保存的修改将丢弃。'))return;setEditing(null);setBatch(false);setError('')};

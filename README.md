@@ -15,9 +15,23 @@ npm run dev
 
 The `main` branch is built and deployed by `.github/workflows/deploy.yml`. In the repository settings, enable Pages with **GitHub Actions** as the build and deployment source. The Vite base path is configured for `/maple-leaf-proposal-studio/`.
 
+## Cloud synchronization
+
+The app can use Supabase as a shared backend while keeping IndexedDB as a local cache. Projects, attraction records, class templates, and their images are stored as JSON records in Supabase Postgres. Realtime changes are enabled for the three tables.
+
+This repository's `supabase/schema.sql` intentionally grants **anyone on the internet** read, create, update, and delete access without signing in. That matches the requested public collaboration mode. Do not use it for customer-confidential proposals or private business data. Anyone can modify or delete records; export regular backups.
+
+To enable cloud sync:
+
+1. Create a Supabase project and run `supabase/schema.sql` in its SQL Editor.
+2. In the GitHub repository, add Actions variables named `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` using the project's URL and public anon/publishable key. Do not use a service-role or secret key.
+3. Deploy the `main` branch. The Studio's **Settings → Shared Cloud → Upload local data** action adds records from the current browser. Matching IDs already in the cloud are skipped, never overwritten.
+
+The first sync is a deliberate user action. When configured, normal project, attraction, and class-template edits are saved to the shared cloud and updates are broadcast to other open browsers.
+
 ## Local data and backups
 
-Projects, attraction records, images, and class templates are saved in the current browser's IndexedDB. Publishing this static website does not upload or synchronize that information. Each computer/browser profile has its own data.
+Without the Supabase variables above, projects, attraction records, images, and class templates remain in the current browser's IndexedDB. In cloud mode, IndexedDB remains as a cache and the shared records live in Supabase.
 
 Before moving to a different browser or computer:
 
@@ -28,6 +42,6 @@ Before moving to a different browser or computer:
 
 Restoring project, attraction, and class-template data are separate actions. Avoid selecting replacement/overwrite options unless that is intended.
 
-## Privacy note
+## Public sharing notice
 
-This is a static public website. Any text and images included in the published source or build can be viewed by visitors. Do not put customer-specific data, credentials, or confidential material in the repository. User-created proposal data stays in that user's browser unless the user exports and shares a backup.
+The Pages website and Supabase endpoint are public. In cloud mode, all records and images are readable and editable by any visitor. Never add service-role keys to the website or repository.

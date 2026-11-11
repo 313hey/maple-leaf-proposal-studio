@@ -3,6 +3,7 @@ import {Copy,Download,MoreHorizontal,Plus,Search,Trash2,Upload,X} from 'lucide-r
 import {SampleClassEditor,SampleClassPage} from './sample-class';
 import {classColumns,classTimeWarnings,type SampleClassData} from './sample-class-data';
 import {backupClassTemplates,classTemplateSnapshot,deleteClassTemplate,loadClassTemplates,newClassTemplate,parseClassTemplateBackup,restoreClassTemplates,saveClassTemplate,type ClassTemplate} from './class-template-store';
+import {subscribeCloudTable} from './cloud-store';
 
 function download(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),60000)}
 export function ClassTemplatePreview({data}:{data:SampleClassData}){
@@ -19,7 +20,7 @@ export function ClassTemplateLibrary({onClose,onApply}:{onClose:()=>void;onApply
  const [pending,setPending]=useState<ClassTemplate[]|null>(null),[policy,setPolicy]=useState<'copy'|'skip'|'replace'>('copy'),[confirmed,setConfirmed]=useState(false);
  const file=useRef<HTMLInputElement>(null);
  const refresh=async()=>setItems(await loadClassTemplates());
- useEffect(()=>{let active=true;loadClassTemplates().then(list=>{if(active)setItems(list)}).catch(e=>{if(active)setError(String(e))}).finally(()=>{if(active)setLoading(false)});return ()=>{active=false}},[]);
+ useEffect(()=>{let active=true;const refresh=()=>loadClassTemplates().then(list=>{if(active)setItems(list)}).catch(e=>{if(active)setError(String(e))}).finally(()=>{if(active)setLoading(false)});void refresh();const unsubscribe=subscribeCloudTable('studio_class_templates',()=>{void refresh()});return ()=>{active=false;unsubscribe()}},[]);
  const visible=items.filter(t=>[t.name,t.city,t.data.title,...t.data.notes,...t.data.rows.flatMap(r=>r.cells)].join(' ').toLowerCase().includes(query.trim().toLowerCase()));
  const selected=visible.find(t=>t.id===selectedId)||visible[0];
  const save=async()=>{if(!editing||!editing.name.trim())return;setBusy(true);setError('');try{await saveClassTemplate({...editing,name:editing.name.trim(),city:editing.city.trim()});await refresh();setSelectedId(editing.id);setQuery('');setEditing(null);setMessage('模板已保存；已有方案保持不变。')}catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}};

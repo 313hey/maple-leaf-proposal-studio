@@ -1,5 +1,6 @@
 import { ATTRACTION_STORE, database } from './project-store.ts';
 import type { Attraction } from './attractions-types.ts';
+import {cloudEnabled,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
 
 function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve:(value:T)=>void,reject:(error:Error)=>void)=>void):Promise<T>{
   return database().then(db=>new Promise<T>((resolve,reject)=>{
@@ -9,10 +10,12 @@ function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve
     tx.onabort=()=>reject(tx.error||new Error('景点库操作中断'));
   }));
 }
-export function loadAttractions():Promise<Attraction[]>{return transact('readonly',(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve((request.result as Attraction[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));request.onerror=()=>reject(request.error||new Error('无法读取景点库'));});}
-export function saveAttraction(item:Attraction):Promise<void>{return transact('readwrite',(store,resolve)=>{store.put({...item,updatedAt:new Date().toISOString()});store.transaction.oncomplete=()=>resolve();});}
-export function saveAttractions(items:Attraction[]):Promise<void>{return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const item of items)store.put(item);tx.oncomplete=()=>resolve();});}
-export function deleteAttractions(ids:string[]):Promise<void>{return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const id of ids)store.delete(id);tx.oncomplete=()=>resolve();});}
+export function loadLocalAttractions():Promise<Attraction[]>{return transact('readonly',(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve((request.result as Attraction[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));request.onerror=()=>reject(request.error||new Error('无法读取景点库'));});}
+export async function loadAttractions():Promise<Attraction[]>{if(!cloudEnabled)return loadLocalAttractions();const items=await loadCloudRecords<Attraction>('studio_attractions');if(!items.length)return loadLocalAttractions();await saveAttractionsLocal(items);return items.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));}
+function saveAttractionsLocal(items:Attraction[]):Promise<void>{return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const item of items)store.put(item);tx.oncomplete=()=>resolve();});}
+export async function saveAttraction(item:Attraction):Promise<void>{const updated={...item,updatedAt:new Date().toISOString()};await saveAttractionsLocal([updated]);if(cloudEnabled)await saveCloudRecords('studio_attractions',[updated]);}
+export async function saveAttractions(items:Attraction[]):Promise<void>{await saveAttractionsLocal(items);if(cloudEnabled)await saveCloudRecords('studio_attractions',items);}
+export async function deleteAttractions(ids:string[]):Promise<void>{if(cloudEnabled)await deleteCloudRecords('studio_attractions',ids);return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const id of ids)store.delete(id);tx.oncomplete=()=>resolve();});}
 export async function backupAttractions():Promise<Blob>{const items=await loadAttractions();return new Blob([JSON.stringify({format:'maple-leaf-attractions',version:1,createdAt:new Date().toISOString(),items},null,2)],{type:'application/json'});}
 export async function restoreAttractions(file:File):Promise<number>{
   const raw=JSON.parse(await file.text());
