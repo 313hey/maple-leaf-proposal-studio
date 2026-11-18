@@ -68,7 +68,7 @@ test('旧备份不能覆盖本机较新的景点及原图，离线详情可读�
  await saveAttraction(original);
  const current=(await loadAttractionDetails([original.id]))[0];
  assert.deepEqual(current.images,original.images);
- await assert.rejects(saveAttractions([{...original,descriptionEn:'Old backup',updatedAt:'2020-01-01T00:00:00.000Z'}]),/云端版本已变化/);
+ await assert.rejects(saveAttractions([{...original,descriptionEn:'Old backup',updatedAt:'2020-01-01T00:00:00.000Z'}]),/本机已有较新的景点版本/);
  const reopened=(await loadAttractionDetails([original.id]))[0];
  assert.equal(reopened.descriptionEn,'Current text');
  assert.deepEqual(reopened.images,original.images);

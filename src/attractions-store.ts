@@ -17,6 +17,7 @@ export class AttractionCloudConflictError extends Error{
  readonly savedLocally=true;
  constructor(){super('已保留本机修改和待同步记录，但云端版本已变化。请先备份资源库并核对冲突，当前修改不会自动覆盖同事的数据。');this.name='AttractionCloudConflictError';}
 }
+class AttractionBatchPreflightConflictError extends Error{}
 export const cachedAttractionsFromError=(error:unknown):Attraction[]|undefined=>error instanceof AttractionCloudLoadError?error.cachedItems:undefined;
 function pendingItems():PendingAttraction[]{try{const value=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return Array.isArray(value)?value.filter((x):x is PendingAttraction=>x?.kind==='upsert'&&(x.item?.id||x.id)):[]}catch{return[]}}
 function writePending(items:PendingAttraction[]){localStorage.setItem(PENDING_KEY,JSON.stringify(items));}
@@ -68,11 +69,11 @@ export async function saveAttraction(item:Attraction,expectedUpdatedAt:string|nu
 }
 export async function saveAttractions(items:Attraction[]):Promise<'cloud'|'local'>{
  const previous=await Promise.all(items.map(item=>loadLocalAttraction(item.id)));
- if(previous.some((saved,index)=>saved&&saved.updatedAt>items[index].updatedAt))throw new AttractionCloudConflictError();
+ if(previous.some((saved,index)=>saved&&saved.updatedAt>items[index].updatedAt))throw new Error('本机已有较新的景点版本，未导入这批资料。请先核对备份与现有内容。');
  if(!cloudEnabled){await saveAttractionsLocal(items);return'local'}
  const expected=new Map<string,string|null>(),prepared:Attraction[]=[];
- try{const summaries=new Map((await loadCloudAttractionSummaries()).map(summary=>[summary.id,summary]));for(const item of items){const summary=summaries.get(item.id);if(summary&&summary.updatedAt>item.updatedAt)throw new AttractionCloudConflictError();expected.set(item.id,summary?.updatedAt??null);prepared.push({...item,updatedAt:nextAttractionUpdatedAt(summary?.updatedAt??null,item.updatedAt)})}}
- catch(error){if(error instanceof AttractionCloudConflictError)throw error;await saveAttractionsLocal(items);for(const item of items)markPending([item],null);throw new AttractionCloudSaveError(error)}
+ try{const summaries=new Map((await loadCloudAttractionSummaries()).map(summary=>[summary.id,summary]));for(const item of items){const summary=summaries.get(item.id);if(summary&&summary.updatedAt>item.updatedAt)throw new AttractionBatchPreflightConflictError('云端版本已变化，未导入这批资料。请先核对备份与云端内容。');expected.set(item.id,summary?.updatedAt??null);prepared.push({...item,updatedAt:nextAttractionUpdatedAt(summary?.updatedAt??null,item.updatedAt)})}}
+ catch(error){if(error instanceof AttractionBatchPreflightConflictError)throw error;await saveAttractionsLocal(items);for(const item of items)markPending([item],null);throw new AttractionCloudSaveError(error)}
  await saveAttractionsLocal(prepared);
  for(const item of prepared)markPending([item],expected.get(item.id)??null);
  try{for(const item of prepared){await saveCloudAttractionIfUnchanged(item,expected.get(item.id)??null);clearPending([item.id],item.updatedAt)}return'cloud'}
