@@ -56,3 +56,9 @@ test('保存使用资源ID，不合并其他同名项；确认同名后可持久
  assert.equal(reopened.find(a=>a.id===museum.id).descriptionEn,'Revised introduction');assert.deepEqual(reopened.find(a=>a.id===museum.id).images,museum.images);assert.deepEqual(reopened.find(a=>a.id===planning.id),beforePlanning);
  assert.deepEqual((await loadProjects()).find(p=>p.id===project.id),project);
 });
+
+test('未配置云端时，单条及批量保存明确返回本机状态',async()=>{
+ const item=resource('Local-only Attraction');
+ assert.equal(await saveAttraction(item),'local');
+ assert.equal(await saveAttractions([{...resource('Local-only Batch')}]),'local');
+});
