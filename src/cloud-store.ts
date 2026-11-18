@@ -13,9 +13,20 @@ const client=cloudEnabled?createClient(url,key,{auth:{persistSession:false,autoR
 
 function requireClient(){if(!client)throw new Error('云端存储尚未连接。请配置 Supabase 项目后重新部署。');return client;}
 export async function loadCloudRecords<T>(table:CloudTable):Promise<T[]>{
- const {data,error}=await requireClient().from(table).select('id,payload,updated_at').order('updated_at',{ascending:false});
- if(error)throw new Error(`读取云端${table}失败：${error.message}`);
- return ((data||[]) as CloudRecord[]).map(row=>row.payload as T);
+ const db=requireClient();
+ // Attraction records can contain large embedded images. Fetching the whole
+ // table in one PostgREST statement can exceed Supabase's statement timeout.
+ const {data:keys,error:keyError}=await db.from(table).select('id').order('id',{ascending:true});
+ if(keyError)throw new Error(`读取云端${table}失败：${keyError.message}`);
+ const ids=((keys||[]) as Array<{id:string}>).map(row=>row.id);
+ const rows:CloudRecord[]=[];
+ // Keep each response small so large image payloads do not time out.
+ for(let index=0;index<ids.length;index+=2){
+  const {data,error}=await db.from(table).select('id,payload,updated_at').in('id',ids.slice(index,index+2));
+  if(error)throw new Error(`读取云端${table}失败：${error.message}`);
+  rows.push(...((data||[]) as CloudRecord[]));
+ }
+ return rows.sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).map(row=>row.payload as T);
 }
 export async function loadCloudRecordIds(table:CloudTable):Promise<string[]>{const {data,error}=await requireClient().from(table).select('id');if(error)throw new Error(`检查云端数据失败：${error.message}`);return (data||[]).map((row:{id:string})=>row.id);}
 export async function saveCloudRecords<T extends {id:string;updatedAt?:string;createdAt?:string}>(table:CloudTable,items:T[]):Promise<void>{
