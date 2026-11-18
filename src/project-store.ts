@@ -83,10 +83,14 @@ function enqueue<T>(operation:()=>Promise<T>):Promise<T> {
 
 export function database():Promise<IDBDatabase> {
   if(!connection)connection=new Promise((resolve,reject)=>{
+    let settled=false;
+    let blockedTimer:number|undefined;
+    const fail=(error:Error)=>{if(settled)return;settled=true;if(blockedTimer!==undefined)window.clearTimeout(blockedTimer);connection=undefined;reject(error)};
     const request=indexedDB.open(DB_NAME,3);
     request.onupgradeneeded=()=>{for(const name of [STORE,ATTRACTION_STORE,PENDING_PROJECTS])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'id'});};
-    request.onsuccess=()=>{request.result.onversionchange=()=>request.result.close();resolve(request.result)};
-    request.onerror=()=>reject(request.error||new Error('无法打开项目存储'));
+    request.onblocked=()=>{if(blockedTimer===undefined)blockedTimer=window.setTimeout(()=>fail(new Error('本机存储被另一个打开的工作台占用。请关闭其他 Maple Leaf 标签页后重试；云端方案仍可读取。')),1500)};
+    request.onsuccess=()=>{if(settled){request.result.close();return}settled=true;if(blockedTimer!==undefined)window.clearTimeout(blockedTimer);request.result.onversionchange=()=>request.result.close();resolve(request.result)};
+    request.onerror=()=>fail(request.error||new Error('无法打开项目存储'));
   });
   return connection;
 }
@@ -101,9 +105,9 @@ export async function loadLocalProjects():Promise<ProjectData[]> {
 }
 export async function loadProjects():Promise<ProjectData[]> {
   if(!cloudEnabled)return loadLocalProjects();
-  const local=await loadLocalProjects();
   let remote:ProjectData[];
-  try{remote=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){throw new ProjectCloudLoadError(error,local)}
+  try{remote=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=await loadLocalProjects().catch(()=>[]);throw new ProjectCloudLoadError(error,local)}
+  const local=await loadLocalProjects().catch(()=>[]);
   if(!remote.length){
     const queued=await readPendingProjects();
     for(const item of queued.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch(error){throw new ProjectCloudLoadError(error,local)}
