@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
 import {emptyAttraction,snapshotAttraction} from '../src/attractions-types.ts';
 import {findAttractionDuplicates,normalizeAttractionName} from '../src/attraction-recommend.ts';
-import {loadAttractions,saveAttraction,saveAttractions} from '../src/attractions-store.ts';
+import {loadAttractions,loadAttractionDetails,saveAttraction,saveAttractions} from '../src/attractions-store.ts';
 import {blankProject,loadProjects,saveProject} from '../src/project-store.ts';
 const resource=(en,zh='',city='Shanghai')=>({...emptyAttraction(),nameEn:en,nameZh:zh,city});
 
@@ -61,4 +61,15 @@ test('未配置云端时，单条及批量保存明确返回本机状态',async(
  const item=resource('Local-only Attraction');
  assert.equal(await saveAttraction(item),'local');
  assert.equal(await saveAttractions([{...resource('Local-only Batch')}]),'local');
+});
+
+test('旧备份不能覆盖本机较新的景点及原图，离线详情可读取完整缓存',async()=>{
+ const original={...resource('Offline Saved Place'),images:['data:image/png;base64,preserved'],descriptionEn:'Current text'};
+ await saveAttraction(original);
+ const current=(await loadAttractionDetails([original.id]))[0];
+ assert.deepEqual(current.images,original.images);
+ await assert.rejects(saveAttractions([{...original,descriptionEn:'Old backup',updatedAt:'2020-01-01T00:00:00.000Z'}]),/云端版本已变化/);
+ const reopened=(await loadAttractionDetails([original.id]))[0];
+ assert.equal(reopened.descriptionEn,'Current text');
+ assert.deepEqual(reopened.images,original.images);
 });
