@@ -21,10 +21,14 @@ export async function loadCloudRecords<T>(table:CloudTable):Promise<T[]>{
  const ids=((keys||[]) as Array<{id:string}>).map(row=>row.id);
  const rows:CloudRecord[]=[];
  // Keep each response small so large image payloads do not time out.
- for(let index=0;index<ids.length;index+=2){
-  const {data,error}=await db.from(table).select('id,payload,updated_at').in('id',ids.slice(index,index+2));
-  if(error)throw new Error(`读取云端${table}失败：${error.message}`);
-  rows.push(...((data||[]) as CloudRecord[]));
+ const pageSize=2,pagesPerBatch=4;
+ for(let index=0;index<ids.length;index+=pageSize*pagesPerBatch){
+  const pages=Array.from({length:pagesPerBatch},(_,page)=>ids.slice(index+page*pageSize,index+(page+1)*pageSize)).filter(page=>page.length);
+  const results=await Promise.all(pages.map(page=>db.from(table).select('id,payload,updated_at').in('id',page)));
+  for(const {data,error} of results){
+   if(error)throw new Error(`读取云端${table}失败：${error.message}`);
+   rows.push(...((data||[]) as CloudRecord[]));
+  }
  }
  return rows.sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).map(row=>row.payload as T);
 }
