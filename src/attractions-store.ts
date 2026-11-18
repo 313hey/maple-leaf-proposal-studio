@@ -24,6 +24,7 @@ function writePending(items:PendingAttraction[]){localStorage.setItem(PENDING_KE
 function markPending(items:Attraction[],expectedUpdatedAt?:string|null){const pending=new Map(pendingItems().map(x=>[x.item?.id||x.id!,x]));for(const item of items)pending.set(item.id,{kind:'upsert',id:item.id,updatedAt:item.updatedAt,expectedUpdatedAt});writePending([...pending.values()]);}
 function clearPending(ids:string[],updatedAt?:string){const remove=new Set(ids);writePending(pendingItems().filter(x=>!remove.has(x.item?.id||x.id!)||(updatedAt&&x.updatedAt!==updatedAt)));}
 export function hasPendingAttraction(id:string):boolean{return pendingItems().some(item=>(item.item?.id||item.id)===id);}
+export function pendingAttractionExpectedVersion(id:string):string|null|undefined{return pendingItems().find(item=>(item.item?.id||item.id)===id)?.expectedUpdatedAt;}
 
 function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve:(value:T)=>void,reject:(error:Error)=>void)=>void):Promise<T>{
   return database().then(db=>new Promise<T>((resolve,reject)=>{
