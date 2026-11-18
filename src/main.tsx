@@ -14,7 +14,7 @@ import { buildItineraryPages, ItinerarySheet, resolvedLayout, type DayData, type
 import { ClauseEditor, StructuredPricingPage, type ClauseKind, type ClauseLanguage } from './clauses';
 import { DateField } from './DateField';
 import { SampleClassEditor, SampleClassPage } from './sample-class';
-import type { ExportData } from './export';
+import { createDocx, createPdf, download, fileBase, type ExportData } from './export';
 import { ExportDialog } from './ExportDialog';
 import { ProjectListDialog } from './ProjectListDialog';
 import { AttractionsLibrary } from './AttractionsLibrary';
@@ -26,7 +26,7 @@ import {learningDisplay} from './attraction-layout';
 import type { AttractionSnapshot } from './attractions-types';
 import './attractions.css';
 import type { Highlight } from './proposal-types';
-import { blankProject, getActiveProjectId, loadProjects, removeProject, saveProjects, saveProject, setActiveProjectId, type ProjectData } from './project-store';
+import { blankProject, getActiveProjectId, loadProjects, ProjectCloudSaveError, removeProject, saveProjects, saveProject, setActiveProjectId, type ProjectData } from './project-store';
 import './export.css';
 import './studio-ui.css';
 import './workflow-ui.css';
@@ -75,6 +75,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectData[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading'|'saving'|'saved'|'error'>('loading');
+  const [saveError,setSaveError]=useState('');
   const [projectListOpen, setProjectListOpen] = useState(false);
   const [libraryOpen,setLibraryOpen]=useState(false);
   const [libraryMode,setLibraryMode]=useState<'manage'|'select'|'replace'>('manage');
@@ -131,7 +132,7 @@ function App() {
       const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||list.find(hasProjectContent)||activeProject||list[0];
       setProjects(list);setProject(selected);dayArchive.current=selected.archivedDays||selected.days;
       setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');
-    }).catch(()=>{if(active){setSaveStatus('error');setHydrated(true);}});
+    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
     return ()=>{active=false};
   },[]);
   useEffect(()=>{
@@ -140,14 +141,14 @@ function App() {
     setSaveStatus('saving');
     const timer=window.setTimeout(()=>{
       setProjects(current=>[project,...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
-      saveProject(project).then(()=>{if(active)setSaveStatus('saved')}).catch(()=>{if(active)setSaveStatus('error')});
+      saveProject(project).then(()=>{if(active){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}});
     },cloudEnabled?350:0);
     return ()=>{active=false;window.clearTimeout(timer)};
   },[project,hydrated]);
   useEffect(()=>{
     if(!hydrated||!cloudEnabled)return;
     let active=true;
-    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadProjects().then(stored=>{if(!active)return;setProjects(stored);const latest=stored.find(item=>item.id===project.id);if(latest&&latest.updatedAt>project.updatedAt&&saveStatus==='saved')setProject(latest)}).catch(()=>{if(active)setSaveStatus('error')})});
+    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadProjects().then(stored=>{if(!active)return;setProjects(stored);const latest=stored.find(item=>item.id===project.id);if(latest&&latest.updatedAt>project.updatedAt&&saveStatus==='saved')setProject(latest)}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})});
     return()=>{active=false;unsubscribe()};
   },[hydrated,project.id,project.updatedAt,saveStatus]);
   const change = (fn: () => void) => fn();
@@ -229,7 +230,6 @@ function App() {
     if(checks.errors.length){setExportError('请先修正阻止导出的问题。');return;}
     setExportBusy(format);setExportError('');
     try {
-      const {createDocx,createPdf,download,fileBase}=await import('./export');
       const blob=format==='pdf'?await createPdf(exportStage.current!):await createDocx(exportData());
       download(blob,`${fileBase(title)}.${format==='pdf'?'pdf':'docx'}`);
       setExportOpen(false);
@@ -245,7 +245,7 @@ function App() {
       <header className="topbar">
         <details className="project-switcher" ref={projectMenu}><summary aria-label="切换项目"><strong>{project.name||'未命名项目'}</strong><ChevronDown size={14}/></summary><div><span>最近方案</span>{projects.slice(0,5).map(item=><button key={item.id} className={item.id===project.id?'current':''} onClick={()=>activateProject(item)}>{item.name||'未命名项目'}</button>)}<button onClick={createProject} disabled={!hydrated}><Plus size={14}/> 新建方案</button><button onClick={()=>{if(projectMenu.current)projectMenu.current.open=false;setProjectListOpen(true)}}>管理所有方案</button></div></details>
         <div className="workspace-modes" role="group" aria-label="工作空间模式">{([['edit','专注编辑',<PanelLeftClose size={14}/>],['split','分栏预览',<LayoutTemplate size={14}/>],['preview','全屏预览',<FileText size={14}/>]] as const).map(([id,label,icon])=><button key={id} aria-pressed={workspaceMode===id} disabled={id==='split'&&compactWorkspace} title={id==='split'&&compactWorkspace?'窄屏请使用专注编辑或全屏预览':label} onClick={()=>setWorkspaceMode(id)}>{icon}<span>{label}</span></button>)}</div>
-        <div className="top-actions"><span className="save-state" role="status"><Check size={14}/>{saveStatus==='saved'?'已自动保存':saveStatus==='saving'?'正在保存…':saveStatus==='loading'?'正在读取项目…':'保存失败，请检查浏览器存储'}</span><details className="mobile-main-menu"><summary aria-label="主导航"><MoreHorizontal size={18}/></summary><div><button onClick={()=>setProjectListOpen(true)}>我的方案</button><button onClick={()=>setContentLibraryOpen(true)}>资源库</button><button onClick={()=>setSettingsOpen(true)}>设置</button></div></details><button className="export-primary" onClick={()=>{setExportError('');setExportOpen(true)}}><FileDown size={16}/> 导出方案</button></div>
+        <div className="top-actions"><span className="save-state" role="status" title={saveStatus==='error'?saveError:undefined}><Check size={14}/>{saveStatus==='saved'?'已自动保存':saveStatus==='saving'?'正在保存…':saveStatus==='loading'?'正在读取项目…':saveError||'保存或同步失败，请查看详情'}</span><details className="mobile-main-menu"><summary aria-label="主导航"><MoreHorizontal size={18}/></summary><div><button onClick={()=>setProjectListOpen(true)}>我的方案</button><button onClick={()=>setContentLibraryOpen(true)}>资源库</button><button onClick={()=>setSettingsOpen(true)}>设置</button></div></details><button className="export-primary" onClick={()=>{setExportError('');setExportOpen(true)}}><FileDown size={16}/> 导出方案</button></div>
       </header>
       <div className={`workspace mode-${workspaceMode} ${(section==='Daily itinerary'&&itineraryMode==='table')||section==='Sample class'?'wide-editor':''}`}>
         <nav className="chapter-nav" aria-label="方案章节"><span>方案内容</span>{navigationSections.map(id=><button key={id} className={activeNavigation===id?'selected':''} onClick={()=>{setSection(chapterFor[id]);setView(id)}}>{id==='program'||id==='itinerary'?'行程管理':id==='overview'?'项目概览':SECTION_DEFS.find(([key])=>key===id)![1]}</button>)}<button className="manage-sections" onClick={()=>setStructureOpen(true)}>＋ 管理内容板块</button></nav>
