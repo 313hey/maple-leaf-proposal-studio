@@ -26,7 +26,7 @@ import {learningDisplay} from './attraction-layout';
 import type { AttractionSnapshot } from './attractions-types';
 import './attractions.css';
 import type { Highlight } from './proposal-types';
-import { blankProject, getActiveProjectId, loadProjects, ProjectCloudSaveError, removeProject, saveProjects, saveProject, setActiveProjectId, type ProjectData } from './project-store';
+import { blankProject, getActiveProjectId, loadLocalProjects, loadProjects, ProjectCloudLoadError, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData } from './project-store';
 import './export.css';
 import './studio-ui.css';
 import './workflow-ui.css';
@@ -76,6 +76,7 @@ function App() {
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading'|'saving'|'saved'|'error'>('loading');
   const [saveError,setSaveError]=useState('');
+  const skipInitialSave=useRef(true);
   const [projectListOpen, setProjectListOpen] = useState(false);
   const [libraryOpen,setLibraryOpen]=useState(false);
   const [libraryMode,setLibraryMode]=useState<'manage'|'select'|'replace'>('manage');
@@ -132,18 +133,20 @@ function App() {
       const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||list.find(hasProjectContent)||activeProject||list[0];
       setProjects(list);setProject(selected);dayArchive.current=selected.archivedDays||selected.days;
       setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');
-    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
+    }).catch(async error=>{if(active){const cached=error instanceof ProjectCloudLoadError?error.cachedProjects:await loadLocalProjects().catch(()=>[]);if(cached.length){const activeProject=cached.find(item=>item.id===getActiveProjectId());const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||cached.find(hasProjectContent)||activeProject||cached[0];setProjects(cached);setProject(selected);setActiveProjectId(selected.id);dayArchive.current=selected.archivedDays||selected.days;}setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
     return ()=>{active=false};
   },[]);
   useEffect(()=>{
     if(!hydrated)return;
+    if(skipInitialSave.current){skipInitialSave.current=false;return;}
     let active=true;
     setSaveStatus('saving');
-    const timer=window.setTimeout(()=>{
+    void saveProjectLocally(project).then(()=>{if(active&&!cloudEnabled){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
+    const timer=cloudEnabled?window.setTimeout(()=>{
       setProjects(current=>[project,...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
       saveProject(project).then(()=>{if(active){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}});
-    },cloudEnabled?350:0);
-    return ()=>{active=false;window.clearTimeout(timer)};
+    },350):undefined;
+    return ()=>{active=false;if(timer!==undefined)window.clearTimeout(timer)};
   },[project,hydrated]);
   useEffect(()=>{
     if(!hydrated||!cloudEnabled)return;
