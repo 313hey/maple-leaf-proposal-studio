@@ -74,11 +74,13 @@ export async function loadCloudAttractionImage(id:string):Promise<string>{
  const request=(async()=>{const data=await retryCloudQuery<{images:unknown;coverIndex:unknown}>(()=>requireClient().from('studio_attractions').select('images:payload->images,coverIndex:payload->>coverIndex').eq('id',id).maybeSingle(),'读取景点图片失败');const images=Array.isArray(data?.images)?data.images:[];const index=Number(data?.coverIndex)||0;return String(images[index]||images[0]||'')})();
  attractionImageRequests.set(id,request);try{const image=await request;attractionImageCache.set(id,image);return image}finally{attractionImageRequests.delete(id)}
 }
-export async function loadCloudAttractionDetails(ids:string[]):Promise<Attraction[]>{
+const attractionDetailRequests=new Map<string,Promise<Attraction[]>>();
+export function loadCloudAttractionDetails(ids:string[]):Promise<Attraction[]>{
  // Kept separate from the summary path: callers request full payloads only for selected/opened records.
- if(!ids.length)return [];
- const data=await retryCloudQuery(()=>requireClient().from('studio_attractions').select('id,payload,updated_at').in('id',ids),'读取景点详情失败');
- return ((data||[]) as CloudRecord[]).map(row=>({...row.payload as Attraction,updatedAt:row.updated_at}));
+ if(!ids.length)return Promise.resolve([]);
+ const key=[...new Set(ids)].sort().join('|'),existing=attractionDetailRequests.get(key);if(existing)return existing;
+ const request=(async()=>{const data=await retryCloudQuery(()=>requireClient().from('studio_attractions').select('id,payload,updated_at').in('id',ids),'读取景点详情失败');return ((data||[]) as CloudRecord[]).map(row=>({...row.payload as Attraction,updatedAt:row.updated_at}))})();
+ attractionDetailRequests.set(key,request);void request.finally(()=>attractionDetailRequests.delete(key)).catch(()=>{});return request;
 }
 export async function loadCloudRecordIds(table:CloudTable):Promise<string[]>{const {data,error}=await requireClient().from(table).select('id');if(error)throw new Error(`检查云端数据失败：${error.message}`);return (data||[]).map((row:{id:string})=>row.id);}
 export async function saveCloudRecords<T extends {id:string;updatedAt?:string;createdAt?:string}>(table:CloudTable,items:T[]):Promise<void>{
