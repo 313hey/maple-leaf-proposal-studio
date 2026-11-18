@@ -62,6 +62,11 @@ const ACTIVE_KEY='maple-leaf-active-project';
 let connection:Promise<IDBDatabase>|undefined;
 let pendingMutation:Promise<unknown>=Promise.resolve();
 
+export class ProjectCloudSaveError extends Error{
+  readonly savedLocally=true;
+  constructor(cause:unknown){super(cause instanceof Error?cause.message:String(cause));this.name='ProjectCloudSaveError';}
+}
+
 function enqueue<T>(operation:()=>Promise<T>):Promise<T> {
   const result=pendingMutation.then(operation,operation);
   pendingMutation=result.catch(()=>undefined);
@@ -106,7 +111,7 @@ async function writeProject(project:ProjectData):Promise<void> {
   });
 }
 
-export function saveProject(project:ProjectData):Promise<void> {return enqueue(async()=>{await writeProject(project);if(cloudEnabled)await saveCloudRecords('studio_projects',[project]);});}
+export function saveProject(project:ProjectData):Promise<void> {return enqueue(async()=>{await writeProject(project);if(cloudEnabled)try{await saveCloudRecords('studio_projects',[project]);}catch(error){throw new ProjectCloudSaveError(error)}});}
 
 async function eraseProject(id:string):Promise<void> {
   const db=await database();
