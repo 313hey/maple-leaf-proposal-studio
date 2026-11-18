@@ -26,7 +26,7 @@ import {learningDisplay} from './attraction-layout';
 import type { AttractionSnapshot } from './attractions-types';
 import './attractions.css';
 import type { Highlight } from './proposal-types';
-import { blankProject, getActiveProjectId, loadLocalProjects, loadProjects, ProjectCloudLoadError, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData } from './project-store';
+import { blankProject, getActiveProjectId, loadLocalProjects, loadProjects, ProjectLoadError, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData } from './project-store';
 import './export.css';
 import './studio-ui.css';
 import './workflow-ui.css';
@@ -133,7 +133,7 @@ function App() {
       const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||list.find(hasProjectContent)||activeProject||list[0];
       setProjects(list);setProject(selected);dayArchive.current=selected.archivedDays||selected.days;
       setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');
-    }).catch(async error=>{if(active){const cached=error instanceof ProjectCloudLoadError?error.cachedProjects:await loadLocalProjects().catch(()=>[]);if(cached.length){const activeProject=cached.find(item=>item.id===getActiveProjectId());const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||cached.find(hasProjectContent)||activeProject||cached[0];setProjects(cached);setProject(selected);setActiveProjectId(selected.id);dayArchive.current=selected.archivedDays||selected.days;}setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
+    }).catch(async error=>{if(active){const cached=error instanceof ProjectLoadError?error.cachedProjects:await loadLocalProjects().catch(()=>[]);if(cached.length){const activeProject=cached.find(item=>item.id===getActiveProjectId());const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||cached.find(hasProjectContent)||activeProject||cached[0];setProjects(cached);setProject(selected);setActiveProjectId(selected.id);dayArchive.current=selected.archivedDays||selected.days;}setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
     return ()=>{active=false};
   },[]);
   useEffect(()=>{

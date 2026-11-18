@@ -21,7 +21,9 @@ export async function loadCloudRecords<T>(table:CloudTable):Promise<T[]>{
  const ids=((keys||[]) as Array<{id:string}>).map(row=>row.id);
  const rows:CloudRecord[]=[];
  // Keep each response small so large image payloads do not time out.
- const pageSize=2,pagesPerBatch=4;
+ // Proposal rows can contain several megabytes of embedded images. Limit the
+ // number of large payloads fetched at once to avoid Supabase statement timeouts.
+ const pageSize=1,pagesPerBatch=2;
  for(let index=0;index<ids.length;index+=pageSize*pagesPerBatch){
   const pages=Array.from({length:pagesPerBatch},(_,page)=>ids.slice(index+page*pageSize,index+(page+1)*pageSize)).filter(page=>page.length);
   const results=await Promise.all(pages.map(page=>db.from(table).select('id,payload,updated_at').in('id',page)));

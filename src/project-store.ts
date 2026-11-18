@@ -67,9 +67,12 @@ export class ProjectCloudSaveError extends Error{
   readonly savedLocally=true;
   constructor(cause:unknown){super(cause instanceof Error?cause.message:String(cause));this.name='ProjectCloudSaveError';}
 }
-export class ProjectCloudLoadError extends Error{
+export class ProjectLoadError extends Error{
   readonly cachedProjects:ProjectData[];
-  constructor(cause:unknown,cachedProjects:ProjectData[]){super(`云端读取失败${cachedProjects.length?`，已恢复本机缓存 ${cachedProjects.length} 个方案`:''}：${cause instanceof Error?cause.message:String(cause)}`);this.name='ProjectCloudLoadError';this.cachedProjects=cachedProjects;}
+  constructor(message:string,cachedProjects:ProjectData[]){super(message);this.name='ProjectLoadError';this.cachedProjects=cachedProjects;}
+}
+export class ProjectCloudLoadError extends ProjectLoadError{
+  constructor(cause:unknown,cachedProjects:ProjectData[]){super(`云端读取或同步失败${cachedProjects.length?`，已保留 ${cachedProjects.length} 个可恢复方案`:''}：${cause instanceof Error?cause.message:String(cause)}`,cachedProjects);this.name='ProjectCloudLoadError';}
 }
 
 function enqueue<T>(operation:()=>Promise<T>):Promise<T> {
@@ -118,7 +121,7 @@ export async function loadProjects():Promise<ProjectData[]> {
   }
   const result=[...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
   // Update current cloud copies while retaining local-only rows as a recovery cache.
-  await saveLocalProjects(result);
+  try{await saveLocalProjects(result)}catch(error){throw new ProjectLoadError(`方案已从云端读取，但本机缓存写入失败：${error instanceof Error?error.message:String(error)}`,result)}
   // Retry queued local writes after the merged data is safely cached.
   const queued=await readPendingProjects();
   for(const item of queued.values()){
