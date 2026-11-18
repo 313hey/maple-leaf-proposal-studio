@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyAttraction} from '../src/attractions-types.ts';
-import {mergeAttractionSummary,nextAttractionUpdatedAt,upsertAttractionSummary} from '../src/attraction-sync.ts';
+import {mergeAttractionSummary,nextAttractionUpdatedAt,preferLocalAttraction,upsertAttractionSummary} from '../src/attraction-sync.ts';
 
 const summary=(id,updatedAt,overrides={})=>({id,updatedAt,nameEn:`Place ${id}`,nameZh:'',city:'Shanghai',category:'Culture',tags:['Culture'],aliases:[],...overrides});
 
@@ -25,4 +25,12 @@ test('Realtime 事件仅替换对应景点；重复或较旧事件不触碰其�
  const first={...emptyAttraction(),id:'one',nameEn:'Old',updatedAt:'2026-11-18T09:00:00.000Z'},other={...emptyAttraction(),id:'two',nameEn:'Unchanged',updatedAt:'2026-11-18T09:00:00.000Z'},items=[first,other];
  const next=upsertAttractionSummary(items,summary('one','2026-11-18T10:00:00.000Z',{nameEn:'New'}));
  assert.equal(next[0].nameEn,'New');assert.equal(next[1],other);assert.equal(upsertAttractionSummary(next,summary('one','2026-11-18T09:30:00.000Z')),next);
+});
+
+test('详情读取保留较新的本机编辑及尚未同步的版本',()=>{
+ const local={...emptyAttraction(),id:'one',updatedAt:'2026-11-18T10:00:00.000Z',descriptionEn:'Local edit',images:['local image']};
+ const remote={...local,updatedAt:'2026-11-18T09:00:00.000Z',descriptionEn:'Old cloud',images:['old image']};
+ assert.equal(preferLocalAttraction(local,remote),local);
+ assert.equal(preferLocalAttraction(local,{...remote,updatedAt:'2026-11-18T11:00:00.000Z'},true),local);
+ assert.equal(preferLocalAttraction(local,{...remote,updatedAt:'2026-11-18T11:00:00.000Z'}).descriptionEn,'Old cloud');
 });

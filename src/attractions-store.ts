@@ -1,6 +1,6 @@
 import { ATTRACTION_STORE, database } from './project-store.ts';
 import type { Attraction } from './attractions-types.ts';
-import {nextAttractionUpdatedAt} from './attraction-sync.ts';
+import {nextAttractionUpdatedAt,preferLocalAttraction} from './attraction-sync.ts';
 import {cloudEnabled,deleteCloudRecords,loadCloudAttractionDetails,loadCloudAttractionSummaries,loadCloudRecords,saveCloudAttractionIfUnchanged,saveCloudRecords,CloudRecordConflictError,type AttractionCloudSummary} from './cloud-store.ts';
 
 const PENDING_KEY='maple-studio-attractions-pending-v1';
@@ -15,7 +15,7 @@ export class AttractionCloudLoadError extends Error{
 }
 export class AttractionCloudConflictError extends Error{
  readonly savedLocally=true;
- constructor(){super('已保留本机修改，但云端版本更新得更晚。请重新打开该景点，核对后再保存。');this.name='AttractionCloudConflictError';}
+ constructor(){super('已保留本机修改和待同步记录，但云端版本已变化。请先备份资源库并核对冲突，当前修改不会自动覆盖同事的数据。');this.name='AttractionCloudConflictError';}
 }
 export const cachedAttractionsFromError=(error:unknown):Attraction[]|undefined=>error instanceof AttractionCloudLoadError?error.cachedItems:undefined;
 function pendingItems():PendingAttraction[]{try{const value=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return Array.isArray(value)?value.filter((x):x is PendingAttraction=>x?.kind==='upsert'&&(x.item?.id||x.id)):[]}catch{return[]}}
@@ -36,9 +36,9 @@ function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve
 export function loadLocalAttractions():Promise<Attraction[]>{return transact('readonly',(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve((request.result as Attraction[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));request.onerror=()=>reject(request.error||new Error('无法读取景点库'));});}
 export function loadLocalAttraction(id:string):Promise<Attraction|undefined>{return transact('readonly',(store,resolve,reject)=>{const request=store.get(id);request.onsuccess=()=>resolve(request.result as Attraction|undefined);request.onerror=()=>reject(request.error||new Error('无法读取景点详情'));});}
 export async function loadAttractionDetails(ids:string[],refreshCloud=true):Promise<Attraction[]>{
- const local=await loadLocalAttractions(),byId=new Map(local.map(item=>[item.id,item]));
+ const local=await Promise.all(ids.map(id=>loadLocalAttraction(id))),byId=new Map(local.filter((item):item is Attraction=>Boolean(item)).map(item=>[item.id,item]));
  const requested=cloudEnabled&&refreshCloud?ids:ids.filter(id=>!byId.has(id));
- if(cloudEnabled&&requested.length){const remote=await loadCloudAttractionDetails(requested);await saveAttractionsLocal(remote);for(const item of remote)byId.set(item.id,item);}
+ if(cloudEnabled&&requested.length){const remote=await loadCloudAttractionDetails(requested),newer:Attraction[]=[];for(const item of remote){const chosen=preferLocalAttraction(byId.get(item.id),item,hasPendingAttraction(item.id));if(chosen===item)newer.push(item);byId.set(item.id,chosen)}if(newer.length)await saveAttractionsLocal(newer);}
  return ids.map(id=>byId.get(id)).filter((item):item is Attraction=>Boolean(item));
 }
 export async function loadAttractionSummaries():Promise<AttractionCloudSummary[]>{return loadCloudAttractionSummaries();}
@@ -63,7 +63,7 @@ export async function saveAttraction(item:Attraction,expectedUpdatedAt:string|nu
  const updatedAt=nextAttractionUpdatedAt(expectedUpdatedAt,item.updatedAt);
  const updated={...item,updatedAt};await saveAttractionsLocal([updated]);if(!cloudEnabled)return'local';
  try{await saveCloudAttractionIfUnchanged(updated,expectedUpdatedAt);clearPending([updated.id]);return'cloud'}
- catch(error){if(error instanceof CloudRecordConflictError)throw new AttractionCloudConflictError();markPending([updated],expectedUpdatedAt);throw new AttractionCloudSaveError(error)}
+ catch(error){markPending([updated],expectedUpdatedAt);if(error instanceof CloudRecordConflictError)throw new AttractionCloudConflictError();throw new AttractionCloudSaveError(error)}
 }
 export async function saveAttractions(items:Attraction[]):Promise<'cloud'|'local'>{await saveAttractionsLocal(items);if(!cloudEnabled)return'local';markPendingFull(items);try{await saveCloudRecords('studio_attractions',items);clearPending(items.map(item=>item.id));return'cloud'}catch(error){throw new AttractionCloudSaveError(error)}}
 export async function deleteAttractions(ids:string[]):Promise<void>{if(cloudEnabled)await deleteCloudRecords('studio_attractions',ids);return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const id of ids)store.delete(id);tx.oncomplete=()=>resolve();});}

@@ -2,6 +2,10 @@ import {emptyAttraction,type Attraction} from './attractions-types.ts';
 import type {AttractionCloudSummary} from './cloud-store.ts';
 
 export type AttractionSyncItem=Attraction&{summaryOnly?:boolean;cloudUpdatedAt?:string;previewImage?:string};
+export function preferLocalAttraction(local:Attraction|undefined,remote:Attraction,pending=false):Attraction{
+ if(!local)return remote;
+ return pending||local.updatedAt>remote.updatedAt?local:remote;
+}
 export function nextAttractionUpdatedAt(expectedUpdatedAt:string|null,itemUpdatedAt:string,now=Date.now()):string{
  const previous=Date.parse(expectedUpdatedAt||itemUpdatedAt);
  return new Date(Math.max(now,Number.isFinite(previous)?previous+1:0)).toISOString();
