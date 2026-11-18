@@ -53,6 +53,7 @@ const NO_ATTRACTIONS:AttractionSnapshot[]=[];
 type Section = 'Overview' | 'Highlights' | 'Attractions' | 'Learning objectives' | 'Daily itinerary' | 'Sample class' | 'Pricing & details';
 type Day = DayData;
 const starterProject=():ProjectData=>({...blankProject(),name:'新研学方案'});
+const hasProjectContent=(item:ProjectData)=>Boolean(item.title.trim()||item.subtitle.trim()||item.summary.trim()||item.destination.trim()||item.audience.trim()||item.coverImage||item.overviewImage||item.highlights.some(h=>h.title.trim()||h.text.trim()||h.image)||item.days.some(d=>d.title.trim()||d.morning.trim()||d.afternoon.trim()||d.evening.trim()||d.date||d.image)||item.sampleClass.rows.some(r=>r.cells.some(Boolean))||item.fee.trim()||item.groupSize.trim()||item.groupSizeZh.trim()||item.attractions?.length||Object.values(item.clauses).some(list=>list.some(c=>c.en.trim()||c.zh.trim())));
 const chapterFor:Record<DocumentSection,Section>={cover:'Overview',overview:'Overview',highlights:'Highlights',attractions:'Attractions',program:'Daily itinerary',itinerary:'Daily itinerary',sample:'Sample class',pricing:'Pricing & details'};
 function App() {
   const [createOpen,setCreateOpen]=useState(false);
@@ -125,7 +126,9 @@ function App() {
       const list=stored.length?stored:[starterProject()];
       if(!stored.length)await saveProject(list[0]);
       if(!active)return;
-      const selected=list.find(item=>item.id===getActiveProjectId())||list[0];
+      const activeProject=list.find(item=>item.id===getActiveProjectId());
+      // A blank starter draft should not hide existing work after a refresh.
+      const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||list.find(hasProjectContent)||activeProject||list[0];
       setProjects(list);setProject(selected);dayArchive.current=selected.archivedDays||selected.days;
       setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');
     }).catch(()=>{if(active){setSaveStatus('error');setHydrated(true);}});
