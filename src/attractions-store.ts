@@ -1,9 +1,10 @@
 import { ATTRACTION_STORE, database } from './project-store.ts';
 import type { Attraction } from './attractions-types.ts';
-import {cloudEnabled,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
+import {nextAttractionUpdatedAt,preferLocalAttraction} from './attraction-sync.ts';
+import {cloudEnabled,deleteCloudRecords,loadCloudAttractionDetails,loadCloudAttractionSummaries,loadCloudAttractionSummary,loadCloudRecords,saveCloudAttractionIfUnchanged,CloudRecordConflictError,type AttractionCloudSummary} from './cloud-store.ts';
 
 const PENDING_KEY='maple-studio-attractions-pending-v1';
-type PendingAttraction={kind:'upsert';item:Attraction};
+type PendingAttraction={kind:'upsert';id?:string;updatedAt?:string;expectedUpdatedAt?:string|null;item?:Attraction};
 export class AttractionCloudSaveError extends Error{
  readonly savedLocally=true;
  constructor(cause:unknown){super(`已保存在本机，但云端同步失败，稍后可重试：${cause instanceof Error?cause.message:String(cause)}`);this.name='AttractionCloudSaveError';}
@@ -12,11 +13,18 @@ export class AttractionCloudLoadError extends Error{
  readonly cachedItems:Attraction[];
  constructor(cause:unknown,cachedItems:Attraction[]){super(`云端资源读取失败：${cause instanceof Error?cause.message:String(cause)}${cachedItems.length?`；已显示本机缓存的 ${cachedItems.length} 条资源`:''}`);this.name='AttractionCloudLoadError';this.cachedItems=cachedItems;}
 }
+export class AttractionCloudConflictError extends Error{
+ readonly savedLocally=true;
+ constructor(){super('已保留本机修改和待同步记录，但云端版本已变化。请先备份资源库并核对冲突，当前修改不会自动覆盖同事的数据。');this.name='AttractionCloudConflictError';}
+}
+class AttractionBatchPreflightConflictError extends Error{}
 export const cachedAttractionsFromError=(error:unknown):Attraction[]|undefined=>error instanceof AttractionCloudLoadError?error.cachedItems:undefined;
-function pendingItems():PendingAttraction[]{try{const value=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return Array.isArray(value)?value.filter((x):x is PendingAttraction=>x?.kind==='upsert'&&x.item?.id):[]}catch{return[]}}
+function pendingItems():PendingAttraction[]{try{const value=JSON.parse(localStorage.getItem(PENDING_KEY)||'[]');return Array.isArray(value)?value.filter((x):x is PendingAttraction=>x?.kind==='upsert'&&(x.item?.id||x.id)):[]}catch{return[]}}
 function writePending(items:PendingAttraction[]){localStorage.setItem(PENDING_KEY,JSON.stringify(items));}
-function markPending(items:Attraction[]){const pending=new Map(pendingItems().map(x=>[x.item.id,x]));for(const item of items)pending.set(item.id,{kind:'upsert',item:structuredClone(item)});writePending([...pending.values()]);}
-function clearPending(ids:string[]){const remove=new Set(ids);writePending(pendingItems().filter(x=>!remove.has(x.item.id)));}
+function markPending(items:Attraction[],expectedUpdatedAt?:string|null){const pending=new Map(pendingItems().map(x=>[x.item?.id||x.id!,x]));for(const item of items)pending.set(item.id,{kind:'upsert',id:item.id,updatedAt:item.updatedAt,expectedUpdatedAt});writePending([...pending.values()]);}
+function clearPending(ids:string[],updatedAt?:string){const remove=new Set(ids);writePending(pendingItems().filter(x=>!remove.has(x.item?.id||x.id!)||(updatedAt&&x.updatedAt!==updatedAt)));}
+export function hasPendingAttraction(id:string):boolean{return pendingItems().some(item=>(item.item?.id||item.id)===id);}
+export function pendingAttractionExpectedVersion(id:string):string|null|undefined{return pendingItems().find(item=>(item.item?.id||item.id)===id)?.expectedUpdatedAt;}
 
 function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve:(value:T)=>void,reject:(error:Error)=>void)=>void):Promise<T>{
   return database().then(db=>new Promise<T>((resolve,reject)=>{
@@ -27,29 +35,66 @@ function transact<T>(mode:IDBTransactionMode, work:(store:IDBObjectStore,resolve
   }));
 }
 export function loadLocalAttractions():Promise<Attraction[]>{return transact('readonly',(store,resolve,reject)=>{const request=store.getAll();request.onsuccess=()=>resolve((request.result as Attraction[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));request.onerror=()=>reject(request.error||new Error('无法读取景点库'));});}
+export function loadLocalAttraction(id:string):Promise<Attraction|undefined>{return transact('readonly',(store,resolve,reject)=>{const request=store.get(id);request.onsuccess=()=>resolve(request.result as Attraction|undefined);request.onerror=()=>reject(request.error||new Error('无法读取景点详情'));});}
+export async function loadAttractionDetails(ids:string[],refreshCloud=true):Promise<Attraction[]>{
+ const local=await Promise.all(ids.map(id=>loadLocalAttraction(id))),byId=new Map(local.filter((item):item is Attraction=>Boolean(item)).map(item=>[item.id,item]));
+ const requested=cloudEnabled&&refreshCloud?ids:ids.filter(id=>!byId.has(id));
+ if(cloudEnabled&&requested.length){try{const remote=await loadCloudAttractionDetails(requested),newer:Attraction[]=[];for(const item of remote){const chosen=preferLocalAttraction(byId.get(item.id),item,hasPendingAttraction(item.id));if(chosen===item)newer.push(item);byId.set(item.id,chosen)}if(newer.length)await saveAttractionsLocal(newer)}catch(error){if(requested.some(id=>!byId.has(id)))throw error}}
+ return ids.map(id=>byId.get(id)).filter((item):item is Attraction=>Boolean(item));
+}
+export async function loadAttractionSummaries():Promise<AttractionCloudSummary[]>{return loadCloudAttractionSummaries();}
 export async function loadAttractions():Promise<Attraction[]>{
  if(!cloudEnabled)return loadLocalAttractions();
  const local=await loadLocalAttractions();
  let remote:Attraction[];
  try{remote=await loadCloudRecords<Attraction>('studio_attractions')}catch(error){throw new AttractionCloudLoadError(error,local)}
+ try{await retryPendingAttractions()}catch{/* retain local edits and report only through explicit sync actions */}
  const pending=pendingItems();
- for(let index=0;index<pending.length;index+=5){
-  const batch=pending.slice(index,index+5);
-  try{await saveCloudRecords('studio_attractions',batch.map(x=>x.item));clearPending(batch.map(x=>x.item.id));}
-  catch{/* retain local edits for an explicit retry on the next refresh */}
- }
  const merged=new Map(remote.map(item=>[item.id,item]));
+ for(const item of local){const cloud=merged.get(item.id);if(!cloud||item.updatedAt>cloud.updatedAt)merged.set(item.id,item);}
  // Keep this tab's latest local draft visible even if its retry just succeeded;
  // the first remote snapshot was taken before that retry.
- for(const {item} of pending)merged.set(item.id,item);
+ for(const queued of pending){const item=queued.item||local.find(candidate=>candidate.id===queued.id);if(item)merged.set(item.id,item)}
  const items=[...merged.values()];
  await saveAttractionsLocal(items);
  return items.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
 }
 function saveAttractionsLocal(items:Attraction[]):Promise<void>{return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const item of items)store.put(item);tx.oncomplete=()=>resolve();});}
-export async function saveAttraction(item:Attraction):Promise<'cloud'|'local'>{const updated={...item,updatedAt:new Date().toISOString()};await saveAttractionsLocal([updated]);if(!cloudEnabled)return'local';markPending([updated]);try{await saveCloudRecords('studio_attractions',[updated]);clearPending([updated.id]);return'cloud'}catch(error){throw new AttractionCloudSaveError(error)}}
-export async function saveAttractions(items:Attraction[]):Promise<'cloud'|'local'>{await saveAttractionsLocal(items);if(!cloudEnabled)return'local';markPending(items);try{await saveCloudRecords('studio_attractions',items);clearPending(items.map(item=>item.id));return'cloud'}catch(error){throw new AttractionCloudSaveError(error)}}
-export async function deleteAttractions(ids:string[]):Promise<void>{if(cloudEnabled)await deleteCloudRecords('studio_attractions',ids);return transact('readwrite',(store,resolve)=>{const tx=store.transaction;for(const id of ids)store.delete(id);tx.oncomplete=()=>resolve();});}
+export async function saveAttraction(item:Attraction,expectedUpdatedAt:string|null=null):Promise<'cloud'|'local'>{
+ const current=await loadLocalAttraction(item.id);
+ if(current&&current.updatedAt>item.updatedAt)throw new Error('本机景点已被其他窗口更新。请重新打开并核对后再保存。');
+ const updatedAt=nextAttractionUpdatedAt(expectedUpdatedAt,item.updatedAt);
+ const updated={...item,updatedAt};await saveAttractionsLocal([updated]);if(!cloudEnabled)return'local';markPending([updated],expectedUpdatedAt);
+ try{await saveCloudAttractionIfUnchanged(updated,expectedUpdatedAt);clearPending([updated.id],updated.updatedAt);return'cloud'}
+ catch(error){if(error instanceof CloudRecordConflictError)throw new AttractionCloudConflictError();throw new AttractionCloudSaveError(error)}
+}
+export async function saveAttractions(items:Attraction[]):Promise<'cloud'|'local'>{
+ const previous=await Promise.all(items.map(item=>loadLocalAttraction(item.id)));
+ if(previous.some((saved,index)=>saved&&saved.updatedAt>items[index].updatedAt))throw new Error('本机已有较新的景点版本，未导入这批资料。请先核对备份与现有内容。');
+ if(!cloudEnabled){await saveAttractionsLocal(items);return'local'}
+ const expected=new Map<string,string|null>(),prepared:Attraction[]=[];
+ try{const summaries=new Map((await loadCloudAttractionSummaries()).map(summary=>[summary.id,summary]));for(const item of items){const summary=summaries.get(item.id);if(summary&&summary.updatedAt>item.updatedAt)throw new AttractionBatchPreflightConflictError('云端版本已变化，未导入这批资料。请先核对备份与云端内容。');expected.set(item.id,summary?.updatedAt??null);prepared.push({...item,updatedAt:nextAttractionUpdatedAt(summary?.updatedAt??null,item.updatedAt)})}}
+ catch(error){if(error instanceof AttractionBatchPreflightConflictError)throw error;await saveAttractionsLocal(items);for(const item of items)markPending([item],null);throw new AttractionCloudSaveError(error)}
+ await saveAttractionsLocal(prepared);
+ for(const item of prepared)markPending([item],expected.get(item.id)??null);
+ try{for(const item of prepared){await saveCloudAttractionIfUnchanged(item,expected.get(item.id)??null);clearPending([item.id],item.updatedAt)}return'cloud'}
+ catch(error){if(error instanceof CloudRecordConflictError)throw new AttractionCloudConflictError();throw new AttractionCloudSaveError(error)}
+}
+export async function deleteAttractions(ids:string[]):Promise<void>{if(cloudEnabled)await deleteCloudRecords('studio_attractions',ids);await transact<void>('readwrite',(store,resolve)=>{const tx=store.transaction;for(const id of ids)store.delete(id);tx.oncomplete=()=>resolve();});clearPending(ids)}
+export async function deleteLocalAttraction(id:string):Promise<void>{return transact('readwrite',(store,resolve)=>{const tx=store.transaction;store.delete(id);tx.oncomplete=()=>resolve();});}
+export async function retryPendingAttractions():Promise<void>{
+ if(!cloudEnabled)return;
+ let hasConflict=false;
+ for(const queued of pendingItems()){
+  const item=queued.item||await loadLocalAttraction(queued.id||'');if(!item||queued.updatedAt&&item.updatedAt!==queued.updatedAt)continue;
+  try{
+   if(queued.item){const summary=await loadCloudAttractionSummary(item.id);if(summary&&summary.updatedAt>item.updatedAt)throw new CloudRecordConflictError();await saveCloudAttractionIfUnchanged(item,summary?.updatedAt??null)}
+   else await saveCloudAttractionIfUnchanged(item,queued.expectedUpdatedAt??null);
+   clearPending([item.id],queued.updatedAt);
+  }catch(error){if(error instanceof CloudRecordConflictError){hasConflict=true;continue}throw error;}
+ }
+ if(hasConflict)throw new AttractionCloudConflictError();
+}
 export async function backupAttractions():Promise<Blob>{const items=await loadAttractions();return new Blob([JSON.stringify({format:'maple-leaf-attractions',version:1,createdAt:new Date().toISOString(),items},null,2)],{type:'application/json'});}
 export async function restoreAttractions(file:File):Promise<{count:number;status:'cloud'|'local'}>{
   const raw=JSON.parse(await file.text());

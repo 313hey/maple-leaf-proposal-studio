@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
 import {emptyAttraction,snapshotAttraction} from '../src/attractions-types.ts';
 import {findAttractionDuplicates,normalizeAttractionName} from '../src/attraction-recommend.ts';
-import {loadAttractions,saveAttraction,saveAttractions} from '../src/attractions-store.ts';
+import {loadAttractions,loadAttractionDetails,pendingAttractionExpectedVersion,saveAttraction,saveAttractions} from '../src/attractions-store.ts';
 import {blankProject,loadProjects,saveProject} from '../src/project-store.ts';
 const resource=(en,zh='',city='Shanghai')=>({...emptyAttraction(),nameEn:en,nameZh:zh,city});
 
@@ -61,4 +61,22 @@ test('未配置云端时，单条及批量保存明确返回本机状态',async(
  const item=resource('Local-only Attraction');
  assert.equal(await saveAttraction(item),'local');
  assert.equal(await saveAttractions([{...resource('Local-only Batch')}]),'local');
+});
+
+test('旧备份不能覆盖本机较新的景点及原图，离线详情可读取完整缓存',async()=>{
+ const original={...resource('Offline Saved Place'),images:['data:image/png;base64,preserved'],descriptionEn:'Current text'};
+ await saveAttraction(original);
+ const current=(await loadAttractionDetails([original.id]))[0];
+ assert.deepEqual(current.images,original.images);
+ await assert.rejects(saveAttractions([{...original,descriptionEn:'Old backup',updatedAt:'2020-01-01T00:00:00.000Z'}]),/本机已有较新的景点版本/);
+ const reopened=(await loadAttractionDetails([original.id]))[0];
+ assert.equal(reopened.descriptionEn,'Current text');
+ assert.deepEqual(reopened.images,original.images);
+});
+
+test('离线队列保留原云端版本，重试编辑时可以使用该版本进行条件写入',()=>{
+ const previous=globalThis.localStorage;
+ globalThis.localStorage={getItem:key=>key==='maple-studio-attractions-pending-v1'?JSON.stringify([{kind:'upsert',id:'pending-one',updatedAt:'2026-11-18T10:00:01.000Z',expectedUpdatedAt:'2026-11-18T10:00:00.000Z'},{kind:'upsert',id:'pending-new',updatedAt:'2026-11-18T10:00:01.000Z',expectedUpdatedAt:null}]):null};
+ try{assert.equal(pendingAttractionExpectedVersion('pending-one'),'2026-11-18T10:00:00.000Z');assert.equal(pendingAttractionExpectedVersion('pending-new'),null);assert.equal(pendingAttractionExpectedVersion('other'),undefined)}
+ finally{if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous}
 });
