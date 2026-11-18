@@ -60,6 +60,14 @@ const STORE='projects';
 const PENDING_PROJECTS='pending-project-sync';
 export const ATTRACTION_STORE='attractions';
 const ACTIVE_KEY='maple-leaf-active-project';
+// User-requested cleanup tombstones prevent stale browser sync queues from
+// resurrecting these verified-empty drafts after deletion.
+const REMOVED_EMPTY_DRAFT_IDS=new Set([
+  '74704b17-b26e-4c4d-88b0-56cdcf7c0914','1662702e-d488-459e-857f-fc70b6ed6329',
+  'dbe21089-4b25-4533-a1f7-13ea5c8e3538','d200566e-ccaa-4ad1-bca7-4c1b2fd846e6',
+  'c60f9f49-ba73-49d8-a260-5b7cd2577d67','8f0e6534-01f9-487c-8de8-9e56fa5232eb',
+  '962df3b5-0d81-4819-838b-f4537d44ea31','326961e5-ae85-4dc1-b972-014147478615',
+]);
 let connection:Promise<IDBDatabase>|undefined;
 let pendingLocalMutation:Promise<unknown>=Promise.resolve();
 let pendingCloudMutation:Promise<unknown>=Promise.resolve();
@@ -111,13 +119,16 @@ async function loadLocalProjectsQuickly():Promise<ProjectData[]>{let timer=0;ret
 async function readPendingProjectsQuickly():Promise<Map<string,ProjectData>>{let timer=0;return Promise.race([readPendingProjects().catch(()=>new Map<string,ProjectData>()),new Promise<Map<string,ProjectData>>(resolve=>{timer=window.setTimeout(()=>resolve(new Map()),1200)})]).finally(()=>window.clearTimeout(timer))}
 export async function loadProjects():Promise<ProjectData[]> {
   if(!cloudEnabled)return loadLocalProjects();
-  let remote:ProjectData[];
-  try{remote=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=await loadLocalProjectsQuickly();throw new ProjectCloudLoadError(error,local)}
-  const local=await loadLocalProjectsQuickly();
+  let cloudRows:ProjectData[];
+  try{cloudRows=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=(await loadLocalProjectsQuickly()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));throw new ProjectCloudLoadError(error,local)}
+  const removedFromCloud=cloudRows.filter(item=>REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(item=>item.id);
+  const remote=cloudRows.filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
+  const local=(await loadLocalProjectsQuickly()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
   if(!remote.length){
+    if(removedFromCloud.length)void enqueueLocal(()=>purgeProjectCache(removedFromCloud)).then(()=>Promise.all(removedFromCloud.map(id=>deleteCloudRecords('studio_projects',[id])))).catch(()=>undefined);
     return local;
   }
-  const pending=await readPendingProjectsQuickly();
+  const pending=new Map([...await readPendingProjectsQuickly()].filter(([id])=>!REMOVED_EMPTY_DRAFT_IDS.has(id)));
   const merged=new Map(remote.map(item=>[item.id,item]));
   const needsQueue:ProjectData[]=[];
   // Pending local versions and newer local edits must survive cloud refreshes.
@@ -131,10 +142,10 @@ export async function loadProjects():Promise<ProjectData[]> {
   const result=[...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
   // Never make cloud-loaded projects wait for IndexedDB reads/writes. Large
   // project images and a locked legacy tab must not leave the whole UI blank.
-  void enqueueLocal(async()=>{for(const item of needsQueue)await markProjectPending(item);await saveLocalProjects(result)}).catch(()=>undefined);
+  void enqueueLocal(async()=>{await purgeProjectCache([...REMOVED_EMPTY_DRAFT_IDS]);for(const item of needsQueue)await markProjectPending(item);await saveLocalProjects(result)}).catch(()=>undefined);
   // Retry older offline edits in the background; their local copies are already
   // included in the returned list and remain available if the cloud is offline.
-  void (async()=>{for(const item of pending.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch{return}})();
+  void (async()=>{for(const id of removedFromCloud)try{await deleteCloudRecords('studio_projects',[id])}catch{}for(const item of pending.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch{return}})();
   return result;
 }
 
@@ -165,6 +176,7 @@ async function eraseProject(id:string):Promise<void> {
     tx.onerror=()=>reject(tx.error||new Error('无法删除项目'));
   });
 }
+async function purgeProjectCache(ids:string[]):Promise<void>{if(!ids.length)return;const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction([STORE,PENDING_PROJECTS],'readwrite');for(const id of ids){tx.objectStore(STORE).delete(id);tx.objectStore(PENDING_PROJECTS).delete(id)}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('清理已删除草稿缓存失败'))})}
 
 export async function removeProject(id:string):Promise<void>{if(cloudEnabled)await enqueueCloud(()=>deleteCloudRecords('studio_projects',[id]));await enqueueLocal(async()=>{await eraseProject(id);await clearProjectPending(id)});}
 
