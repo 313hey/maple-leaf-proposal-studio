@@ -61,7 +61,8 @@ const PENDING_PROJECTS='pending-project-sync';
 export const ATTRACTION_STORE='attractions';
 const ACTIVE_KEY='maple-leaf-active-project';
 let connection:Promise<IDBDatabase>|undefined;
-let pendingMutation:Promise<unknown>=Promise.resolve();
+let pendingLocalMutation:Promise<unknown>=Promise.resolve();
+let pendingCloudMutation:Promise<unknown>=Promise.resolve();
 
 export class ProjectCloudSaveError extends Error{
   readonly savedLocally=true;
@@ -75,11 +76,14 @@ export class ProjectCloudLoadError extends ProjectLoadError{
   constructor(cause:unknown,cachedProjects:ProjectData[]){super(`云端读取或同步失败${cachedProjects.length?`，已保留 ${cachedProjects.length} 个可恢复方案`:''}：${cause instanceof Error?cause.message:String(cause)}`,cachedProjects);this.name='ProjectCloudLoadError';}
 }
 
-function enqueue<T>(operation:()=>Promise<T>):Promise<T> {
-  const result=pendingMutation.then(operation,operation);
-  pendingMutation=result.catch(()=>undefined);
+function enqueue<T>(queue:'local'|'cloud',operation:()=>Promise<T>):Promise<T> {
+  const current=queue==='local'?pendingLocalMutation:pendingCloudMutation;
+  const result=current.then(operation,operation);
+  if(queue==='local')pendingLocalMutation=result.catch(()=>undefined);else pendingCloudMutation=result.catch(()=>undefined);
   return result;
 }
+const enqueueLocal=<T,>(operation:()=>Promise<T>)=>enqueue('local',operation);
+const enqueueCloud=<T,>(operation:()=>Promise<T>)=>enqueue('cloud',operation);
 
 export function database():Promise<IDBDatabase> {
   if(!connection)connection=new Promise((resolve,reject)=>{
@@ -103,34 +107,34 @@ export async function loadLocalProjects():Promise<ProjectData[]> {
     request.onerror=()=>reject(request.error||new Error('无法读取项目'));
   });
 }
+async function loadLocalProjectsQuickly():Promise<ProjectData[]>{let timer=0;return Promise.race([loadLocalProjects().catch(()=>[]),new Promise<ProjectData[]>(resolve=>{timer=window.setTimeout(()=>resolve([]),1200)})]).finally(()=>window.clearTimeout(timer))}
+async function readPendingProjectsQuickly():Promise<Map<string,ProjectData>>{let timer=0;return Promise.race([readPendingProjects().catch(()=>new Map<string,ProjectData>()),new Promise<Map<string,ProjectData>>(resolve=>{timer=window.setTimeout(()=>resolve(new Map()),1200)})]).finally(()=>window.clearTimeout(timer))}
 export async function loadProjects():Promise<ProjectData[]> {
   if(!cloudEnabled)return loadLocalProjects();
   let remote:ProjectData[];
-  try{remote=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=await loadLocalProjects().catch(()=>[]);throw new ProjectCloudLoadError(error,local)}
-  const local=await loadLocalProjects().catch(()=>[]);
+  try{remote=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=await loadLocalProjectsQuickly();throw new ProjectCloudLoadError(error,local)}
+  const local=await loadLocalProjectsQuickly();
   if(!remote.length){
-    const queued=await readPendingProjects();
-    for(const item of queued.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch(error){throw new ProjectCloudLoadError(error,local)}
     return local;
   }
-  const pending=await readPendingProjects();
+  const pending=await readPendingProjectsQuickly();
   const merged=new Map(remote.map(item=>[item.id,item]));
+  const needsQueue:ProjectData[]=[];
   // Pending local versions and newer local edits must survive cloud refreshes.
   for(const item of local){
     const cloud=merged.get(item.id);
     if(pending.has(item.id)||(!cloud&&!cloudMigrationComplete())||(cloud&&item.updatedAt>cloud.updatedAt)){
       merged.set(item.id,item);
-      if(!pending.has(item.id))await markProjectPending(item);
+      if(!pending.has(item.id))needsQueue.push(item);
     }
   }
   const result=[...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
-  // Update current cloud copies while retaining local-only rows as a recovery cache.
-  try{await saveLocalProjects(result)}catch(error){throw new ProjectLoadError(`方案已从云端读取，但本机缓存写入失败：${error instanceof Error?error.message:String(error)}`,result)}
-  // Retry queued local writes after the merged data is safely cached.
-  const queued=await readPendingProjects();
-  for(const item of queued.values()){
-    try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch(error){throw new ProjectCloudLoadError(error,result)}
-  }
+  // Never make cloud-loaded projects wait for IndexedDB reads/writes. Large
+  // project images and a locked legacy tab must not leave the whole UI blank.
+  void enqueueLocal(async()=>{for(const item of needsQueue)await markProjectPending(item);await saveLocalProjects(result)}).catch(()=>undefined);
+  // Retry older offline edits in the background; their local copies are already
+  // included in the returned list and remain available if the cloud is offline.
+  void (async()=>{for(const item of pending.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch{return}})();
   return result;
 }
 
@@ -148,9 +152,9 @@ async function writeProject(project:ProjectData,queueForCloud=cloudEnabled):Prom
 
 async function readPendingProjects():Promise<Map<string,ProjectData>>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(PENDING_PROJECTS,'readonly').objectStore(PENDING_PROJECTS).getAll();request.onsuccess=()=>resolve(new Map((request.result as ProjectData[]).map(item=>[item.id,item])));request.onerror=()=>reject(request.error||new Error('无法读取待同步方案'))})}
 async function markProjectPending(project:ProjectData):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');tx.objectStore(PENDING_PROJECTS).put(project);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法记录待同步方案'))})}
-async function clearProjectPending(id:string):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');tx.objectStore(PENDING_PROJECTS).delete(id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法清除待同步标记'))})}
-export function saveProjectLocally(project:ProjectData):Promise<void>{return enqueue(()=>writeProject(project));}
-export function saveProject(project:ProjectData):Promise<void> {return enqueue(async()=>{await writeProject(project);if(cloudEnabled)try{await saveCloudRecords('studio_projects',[project]);await clearProjectPending(project.id)}catch(error){throw new ProjectCloudSaveError(error)}});}
+async function clearProjectPending(id:string,syncedUpdatedAt?:string):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');const store=tx.objectStore(PENDING_PROJECTS);if(syncedUpdatedAt===undefined)store.delete(id);else{const request=store.get(id);request.onsuccess=()=>{const pending=request.result as ProjectData|undefined;if(!pending||pending.updatedAt<=syncedUpdatedAt)store.delete(id)}}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法清除待同步标记'))})}
+export function saveProjectLocally(project:ProjectData):Promise<void>{return enqueueLocal(()=>writeProject(project));}
+export async function saveProject(project:ProjectData):Promise<void>{let localError:unknown;try{await enqueueLocal(()=>writeProject(project))}catch(error){localError=error}if(cloudEnabled)try{await enqueueCloud(async()=>{await saveCloudRecords('studio_projects',[project]);await clearProjectPending(project.id,project.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}if(localError)throw localError;}
 
 async function eraseProject(id:string):Promise<void> {
   const db=await database();
@@ -162,10 +166,10 @@ async function eraseProject(id:string):Promise<void> {
   });
 }
 
-export function removeProject(id:string):Promise<void> {return enqueue(async()=>{if(cloudEnabled)await deleteCloudRecords('studio_projects',[id]);await eraseProject(id);await clearProjectPending(id);});}
+export async function removeProject(id:string):Promise<void>{if(cloudEnabled)await enqueueCloud(()=>deleteCloudRecords('studio_projects',[id]));await enqueueLocal(async()=>{await eraseProject(id);await clearProjectPending(id)});}
 
 export function getActiveProjectId():string|null {return localStorage.getItem(ACTIVE_KEY);}
 export function setActiveProjectId(id:string):void {localStorage.setItem(ACTIVE_KEY,id);}
 
-async function saveLocalProjects(items:ProjectData[],replace=false):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const stores=cloudEnabled?[STORE,PENDING_PROJECTS]:[STORE];const tx=db.transaction(stores,'readwrite');const store=tx.objectStore(STORE);if(replace)store.clear();for(const item of items){store.put(item);if(cloudEnabled)tx.objectStore(PENDING_PROJECTS).put(item)}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});}
-export function saveProjects(items:ProjectData[]):Promise<void>{return enqueue(async()=>{await saveLocalProjects(items);if(cloudEnabled)try{await saveCloudRecords('studio_projects',items);for(const item of items)await clearProjectPending(item.id)}catch(error){throw new ProjectCloudSaveError(error)}});}
+async function saveLocalProjects(items:ProjectData[],replace=false,queueForCloud=false):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const stores=queueForCloud&&cloudEnabled?[STORE,PENDING_PROJECTS]:[STORE];const tx=db.transaction(stores,'readwrite');const store=tx.objectStore(STORE);if(replace)store.clear();for(const item of items){store.put(item);if(queueForCloud&&cloudEnabled)tx.objectStore(PENDING_PROJECTS).put(item)}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});}
+export async function saveProjects(items:ProjectData[]):Promise<void>{await enqueueLocal(()=>saveLocalProjects(items,false,true));if(cloudEnabled)try{await enqueueCloud(async()=>{await saveCloudRecords('studio_projects',items);for(const item of items)await clearProjectPending(item.id,item.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}}
