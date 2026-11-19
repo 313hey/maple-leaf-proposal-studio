@@ -3,7 +3,7 @@ import type { Clause, ClauseKind, ClauseLanguage } from './clauses';
 import type { Highlight } from './proposal-types';
 import type { SampleClassData } from './sample-class';
 import type { AttractionSnapshot } from './attractions-types';
-import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
+import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords,loadCloudProjectSummaries,loadCloudProjectDetail,type ProjectCloudSummary} from './cloud-store.ts';
 
 export type ProjectData = {
   id:string;
@@ -71,6 +71,8 @@ const REMOVED_EMPTY_DRAFT_IDS=new Set([
 let connection:Promise<IDBDatabase>|undefined;
 let pendingLocalMutation:Promise<unknown>=Promise.resolve();
 let pendingCloudMutation:Promise<unknown>=Promise.resolve();
+const cloudVersions=new Map<string,string>();
+export type ProjectListItem=ProjectData&{summaryOnly?:boolean};
 
 export class ProjectCloudSaveError extends Error{
   readonly savedLocally=true;
@@ -111,10 +113,27 @@ export async function loadLocalProjects():Promise<ProjectData[]> {
   const db=await database();
   return new Promise((resolve,reject)=>{
     const request=db.transaction(STORE,'readonly').objectStore(STORE).getAll();
-    request.onsuccess=()=>resolve((request.result as ProjectData[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
+    request.onsuccess=()=>resolve((request.result as ProjectData[]).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
     request.onerror=()=>reject(request.error||new Error('无法读取项目'));
   });
 }
+export function projectListItem(item:Pick<ProjectData,'id'|'name'|'title'|'destination'|'createdAt'|'updatedAt'> & Partial<Pick<ProjectData,'programmeType'|'isDemo'>>):ProjectListItem{
+ return {...blankProject(),id:item.id,name:item.name,title:item.title,destination:item.destination,createdAt:item.createdAt,updatedAt:item.updatedAt,programmeType:item.programmeType,isDemo:item.isDemo,summaryOnly:true};
+}
+export async function loadProjectList(cached:ProjectData[]=[]):Promise<ProjectListItem[]>{
+ if(!cloudEnabled)return cached.map(projectListItem);
+ const summaries=await loadCloudProjectSummaries();const local=new Map(cached.map(item=>[item.id,item]));const pending=await readPendingProjectsQuickly();
+ for(const item of summaries)cloudVersions.set(item.id,item.updatedAt);
+ const remote=summaries.filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map((item:ProjectCloudSummary)=>{const localItem=local.get(item.id);return projectListItem(localItem&&(pending.has(item.id)||localItem.updatedAt>item.updatedAt)?localItem:item)});
+ const known=new Set(summaries.map(item=>item.id));return [...remote,...cached.filter(item=>!known.has(item.id)&&!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(projectListItem)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+}
+export async function loadProjectDetail(id:string):Promise<ProjectData|undefined>{
+ const db=await database();const read=(store:string)=>new Promise<ProjectData|undefined>((resolve,reject)=>{const request=db.transaction(store,'readonly').objectStore(store).get(id);request.onsuccess=()=>resolve(request.result as ProjectData|undefined);request.onerror=()=>reject(request.error)});
+ const [cached,pending]=await Promise.all([read(STORE),read(PENDING_PROJECTS)]);
+ if(!cloudEnabled||pending||cached&&(!cloudVersions.has(id)||cached.updatedAt>=cloudVersions.get(id)!))return cached;
+ try{const remote=await loadCloudProjectDetail(id);if(!remote)return cached;return await enqueueLocal(async()=>{const [latest,queued]=await Promise.all([read(STORE),read(PENDING_PROJECTS)]);if(queued||latest&&latest.updatedAt>=remote.updatedAt)return latest;await saveLocalProjects([remote]);return remote})}catch(error){if(cached)return cached;throw error}
+}
+export async function loadAllProjectsForBackup():Promise<ProjectData[]>{return loadProjects()}
 async function loadLocalProjectsQuickly():Promise<ProjectData[]>{let timer=0;return Promise.race([loadLocalProjects().catch(()=>[]),new Promise<ProjectData[]>(resolve=>{timer=window.setTimeout(()=>resolve([]),1200)})]).finally(()=>window.clearTimeout(timer))}
 async function readPendingProjectsQuickly():Promise<Map<string,ProjectData>>{let timer=0;return Promise.race([readPendingProjects().catch(()=>new Map<string,ProjectData>()),new Promise<Map<string,ProjectData>>(resolve=>{timer=window.setTimeout(()=>resolve(new Map()),1200)})]).finally(()=>window.clearTimeout(timer))}
 export async function loadProjects():Promise<ProjectData[]> {
