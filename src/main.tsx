@@ -26,7 +26,7 @@ import {learningDisplay} from './attraction-layout';
 import type { AttractionSnapshot } from './attractions-types';
 import './attractions.css';
 import type { Highlight } from './proposal-types';
-import { blankProject, getActiveProjectId, loadLocalProjects, loadProjects, loadProjectList, loadProjectDetail, loadAllProjectsForBackup, projectListItem, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData, type ProjectListItem } from './project-store';
+import { blankProject, getActiveProjectId, hasPendingProject, loadLocalProjects, loadProjects, loadProjectList, loadProjectDetail, loadAllProjectsForBackup, projectListItem, retryPendingProjects, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData, type ProjectListItem } from './project-store';
 import './export.css';
 import './studio-ui.css';
 import './workflow-ui.css';
@@ -75,7 +75,7 @@ function App() {
   const currentProjectRef=useRef(project);currentProjectRef.current=project;
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'loading'|'saving'|'saved'|'error'>('loading');
+  const [saveStatus, setSaveStatus] = useState<'loading'|'saving'|'saved'|'local'|'error'>('loading');
   const [saveError,setSaveError]=useState('');
   const loadedVersions=useRef(new Map<string,string>());
   const activationToken=useRef(0);
@@ -128,14 +128,16 @@ function App() {
     void loadLocalProjects().then(async cached=>{
       if(!active)return;
       const local=cached.filter(item=>item.id);
-      if(local.length){const preferred=local.find(item=>item.id===getActiveProjectId());const selected=(preferred&&hasProjectContent(preferred)?preferred:undefined)||local.find(hasProjectContent)||preferred||local[0];setProjects(local.map(projectListItem));setProject(selected);loadedVersions.current.set(selected.id,selected.updatedAt);dayArchive.current=selected.archivedDays||selected.days;setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved')}
+      if(local.length){const preferred=local.find(item=>item.id===getActiveProjectId());const selected=(preferred&&hasProjectContent(preferred)?preferred:undefined)||local.find(hasProjectContent)||preferred||local[0];setProjects(local.map(projectListItem));setProject(selected);loadedVersions.current.set(selected.id,selected.updatedAt);dayArchive.current=selected.archivedDays||selected.days;setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');void hasPendingProject(selected.id).then(pending=>{if(active&&pending&&currentProjectRef.current.id===selected.id)setSaveStatus('local')}).catch(()=>{})}
+      let cloudList:ProjectListItem[]=[];
       try{
-        const list=await loadProjectList(local);if(!active)return;
-        setProjects(current=>{const merged=new Map(list.map(item=>[item.id,item]));for(const item of current){const remote=merged.get(item.id);if(!remote||item.updatedAt>remote.updatedAt)merged.set(item.id,item)}return [...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))});
-        if(!local.length){if(!list.length){const first=starterProject();await saveProject(first);if(!active)return;setProjects([projectListItem(first)]);setProject(first);loadedVersions.current.set(first.id,first.updatedAt);setActiveProjectId(first.id);setHydrated(true);setSaveStatus('saved');return}const selected=list.find(item=>item.id===getActiveProjectId())||list[0];const detail=await loadProjectDetail(selected.id);if(!active||!detail)return;setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;setActiveProjectId(detail.id);setHydrated(true);setSaveStatus('saved')}
+        const list=await loadProjectList(local);if(!active)return;cloudList=list;
+        setProjects(list);
+        void retryPendingProjects().then(result=>{if(!active)return;if(result.conflicts){setSaveError(`${result.conflicts} 份本机方案与云端版本冲突，已保留本机副本，请先备份并核对。`);setSaveStatus('error')}else if(result.failed){setSaveError(`${result.failed} 份方案尚未同步至云端，本机副本仍保留。`);setSaveStatus('error')}else if(result.synced){setSaveError('');setSaveStatus('saved')}}).catch(()=>{});
+        if(!local.length){if(!list.length){const first=starterProject();await saveProjectLocally(first);if(!active)return;setProjects([projectListItem(first)]);setProject(first);loadedVersions.current.set(first.id,first.updatedAt);setActiveProjectId(first.id);setHydrated(true);setSaveStatus('saving');void saveProject(first).then(()=>{if(active)setSaveStatus('saved')}).catch(error=>{if(active){setSaveError(String(error));setSaveStatus('error')}});return}const selected=list.find(item=>item.id===getActiveProjectId())||list[0];const token=activationToken.current;const detail=await loadProjectDetail(selected.id);if(!active||token!==activationToken.current)return;if(!detail)throw new Error('无法读取方案详情');setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;setActiveProjectId(detail.id);setHydrated(true);setSaveStatus('saved')}
         else {const selected=list.find(item=>item.id===getActiveProjectId());const old=selected&&local.find(item=>item.id===selected.id);if(selected&&old&&selected.updatedAt>old.updatedAt){const detail=await loadProjectDetail(selected.id);if(active&&detail&&currentProjectRef.current===old){setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days}}}
-      }catch(error){if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}}
-    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
+      }catch(error){if(active){if(!local.length){const first=starterProject();let storageError='';try{await saveProjectLocally(first)}catch(failure){storageError=`本机存储失败：${String(failure)}；`}setProjects([projectListItem(first),...cloudList]);setProject(first);loadedVersions.current.set(first.id,first.updatedAt);setActiveProjectId(first.id);setHydrated(true);setSaveError(`${storageError}${error instanceof Error?error.message:String(error)}`)}else setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}}
+    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true)}});
     return ()=>{active=false};
   },[]);
   useEffect(()=>{
@@ -146,21 +148,42 @@ function App() {
     void saveProjectLocally(project).then(()=>{if(active&&!cloudEnabled){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
     const timer=cloudEnabled?window.setTimeout(()=>{
       setProjects(current=>[projectListItem(project),...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
-      saveProject(project).then(()=>{if(active){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}});
+      saveProject(project).then(()=>{if(active){loadedVersions.current.set(project.id,project.updatedAt);setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}});
     },350):undefined;
     return ()=>{active=false;if(timer!==undefined)window.clearTimeout(timer)};
   },[project,hydrated]);
   useEffect(()=>{
     if(!hydrated||!cloudEnabled)return;
     let active=true;
-    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadLocalProjects().then(local=>loadProjectList(local)).then(async list=>{if(!active)return;setProjects(current=>{const merged=new Map(list.map(item=>[item.id,item]));for(const item of current){const remote=merged.get(item.id);if(!remote||item.updatedAt>remote.updatedAt)merged.set(item.id,item)}return [...merged.values()]});const current=currentProjectRef.current;const latest=list.find(item=>item.id===current.id);if(latest&&latest.updatedAt>current.updatedAt&&saveStatus==='saved'){const detail=await loadProjectDetail(current.id);if(active&&detail&&currentProjectRef.current===current&&detail.updatedAt>current.updatedAt){loadedVersions.current.set(detail.id,detail.updatedAt);setProject(detail)}}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})});
+    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadLocalProjects().then(local=>loadProjectList(local)).then(async list=>{if(!active)return;setProjects(list);const current=currentProjectRef.current;const latest=list.find(item=>item.id===current.id);if(latest&&latest.updatedAt>current.updatedAt&&saveStatus==='saved'){const detail=await loadProjectDetail(current.id);if(active&&detail&&currentProjectRef.current===current&&detail.updatedAt>current.updatedAt){loadedVersions.current.set(detail.id,detail.updatedAt);setProject(detail)}}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})});
     return()=>{active=false;unsubscribe()};
   },[hydrated,project.id,project.updatedAt,saveStatus]);
+  useEffect(()=>{
+    if(!cloudEnabled)return;
+    let active=true;
+    const retry=()=>{void retryPendingProjects().then(async result=>{
+      if(!active)return;
+      if(result.conflicts){setSaveError(`${result.conflicts} 份本机方案与云端版本冲突，已保留本机副本，请先备份并核对。`);setSaveStatus('error')}
+      else if(result.failed){setSaveError(`${result.failed} 份方案尚未同步至云端，本机副本仍保留。`);setSaveStatus('error')}
+      else if(result.synced){setSaveError('');setSaveStatus('saved')}
+      const list=await loadProjectList(await loadLocalProjects());if(active)setProjects(list);
+    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})};
+    window.addEventListener('online',retry);
+    const timer=window.setInterval(retry,60000);
+    return()=>{active=false;window.removeEventListener('online',retry);window.clearInterval(timer)};
+  },[]);
+  useEffect(()=>{
+    if(!hydrated||projects.some(item=>item.id===project.id)||saveStatus!=='saved'||loadedVersions.current.get(project.id)!==project.updatedAt)return;
+    let active=true;const previous=project;
+    if(projects.length){void loadProjectDetail(projects[0].id).then(detail=>{if(active&&detail&&currentProjectRef.current===previous){setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);setActiveProjectId(detail.id)}}).catch(error=>{if(active){setSaveError(String(error));setSaveStatus('error')}})}
+    else {const first=starterProject();void saveProjectLocally(first).then(()=>{if(!active||currentProjectRef.current!==previous)return;setProjects([projectListItem(first)]);setProject(first);loadedVersions.current.set(first.id,first.updatedAt);setActiveProjectId(first.id);void saveProject(first).catch(error=>{if(active){setSaveError(String(error));setSaveStatus('error')}})}).catch(error=>{if(active){setSaveError(String(error));setSaveStatus('error')}})}
+    return()=>{active=false};
+  },[hydrated,projects,project.id,project.updatedAt,saveStatus]);
   const change = (fn: () => void) => fn();
   const activateProject=(next:ProjectData)=>{
     if(projectMenu.current)projectMenu.current.open=false;
     const token=++activationToken.current;setActiveProjectId(next.id);setProjectListOpen(false);setDurationNotice('');setClassMessage('');
-    const apply=(detail:ProjectData)=>{if(token!==activationToken.current)return;setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;const first=visibleSections(detail)[0]||'cover';setSelectedDay(0);setSection(chapterFor[first]);setView(first)};
+    const apply=(detail:ProjectData)=>{if(token!==activationToken.current)return;setProject(detail);loadedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;setHydrated(true);const first=visibleSections(detail)[0]||'cover';setSelectedDay(0);setSection(chapterFor[first]);setView(first)};
     if(next.id===currentProjectRef.current.id){apply(currentProjectRef.current);return;}
     if((next as ProjectListItem).summaryOnly){setSaveStatus('loading');void loadProjectDetail(next.id).then(detail=>{if(!detail)throw new Error('无法读取方案详情');apply(detail);setSaveStatus('saved')}).catch(error=>{setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')})}else apply(next);
   };
@@ -254,7 +277,7 @@ function App() {
       <header className="topbar">
         <details className="project-switcher" ref={projectMenu}><summary aria-label="切换项目"><strong>{project.name||'未命名项目'}</strong><ChevronDown size={14}/></summary><div><span>最近方案</span>{projects.slice(0,5).map(item=><button key={item.id} className={item.id===project.id?'current':''} onClick={()=>activateProject(item)}>{item.name||'未命名项目'}</button>)}<button onClick={createProject} disabled={!hydrated}><Plus size={14}/> 新建方案</button><button onClick={()=>{if(projectMenu.current)projectMenu.current.open=false;setProjectListOpen(true)}}>管理所有方案</button></div></details>
         <div className="workspace-modes" role="group" aria-label="工作空间模式">{([['edit','专注编辑',<PanelLeftClose size={14}/>],['split','分栏预览',<LayoutTemplate size={14}/>],['preview','全屏预览',<FileText size={14}/>]] as const).map(([id,label,icon])=><button key={id} aria-pressed={workspaceMode===id} disabled={id==='split'&&compactWorkspace} title={id==='split'&&compactWorkspace?'窄屏请使用专注编辑或全屏预览':label} onClick={()=>setWorkspaceMode(id)}>{icon}<span>{label}</span></button>)}</div>
-        <div className="top-actions"><span className="save-state" role="status" title={saveStatus==='error'?saveError:undefined}><Check size={14}/>{saveStatus==='saved'?'已自动保存':saveStatus==='saving'?'正在保存…':saveStatus==='loading'?'正在读取项目…':saveError||'保存或同步失败，请查看详情'}</span><details className="mobile-main-menu"><summary aria-label="主导航"><MoreHorizontal size={18}/></summary><div><button onClick={()=>setProjectListOpen(true)}>我的方案</button><button onClick={()=>setContentLibraryOpen(true)}>资源库</button><button onClick={()=>setSettingsOpen(true)}>设置</button></div></details><button className="export-primary" onClick={()=>{setExportError('');setExportOpen(true)}}><FileDown size={16}/> 导出方案</button></div>
+        <div className="top-actions"><span className="save-state" role="status" title={saveStatus==='error'?saveError:undefined}><Check size={14}/>{saveStatus==='saved'?'已自动保存':saveStatus==='saving'?'正在保存…':saveStatus==='local'?'仅本机保存，等待云端同步':saveStatus==='loading'?'正在读取项目…':saveError||'保存或同步失败，请查看详情'}</span><details className="mobile-main-menu"><summary aria-label="主导航"><MoreHorizontal size={18}/></summary><div><button onClick={()=>setProjectListOpen(true)}>我的方案</button><button onClick={()=>setContentLibraryOpen(true)}>资源库</button><button onClick={()=>setSettingsOpen(true)}>设置</button></div></details><button className="export-primary" onClick={()=>{setExportError('');setExportOpen(true)}}><FileDown size={16}/> 导出方案</button></div>
       </header>
       <div className={`workspace mode-${workspaceMode} ${(section==='Daily itinerary'&&itineraryMode==='table')||section==='Sample class'?'wide-editor':''}`}>
         <nav className="chapter-nav" aria-label="方案章节"><span>方案内容</span>{navigationSections.map(id=><button key={id} className={activeNavigation===id?'selected':''} onClick={()=>{setSection(chapterFor[id]);setView(id)}}>{id==='program'||id==='itinerary'?'行程管理':id==='overview'?'项目概览':SECTION_DEFS.find(([key])=>key===id)![1]}</button>)}<button className="manage-sections" onClick={()=>setStructureOpen(true)}>＋ 管理内容板块</button></nav>
