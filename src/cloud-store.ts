@@ -1,8 +1,10 @@
 import {createClient} from '@supabase/supabase-js';
+import type {ProjectData} from './project-store.ts';
 import type {Attraction} from './attractions-types.ts';
 
 type CloudRecord={id:string;payload:unknown;updated_at:string};
 type CloudTable='studio_projects'|'studio_attractions'|'studio_class_templates';
+export type ProjectCloudSummary={id:string;updatedAt:string;name:string;title:string;destination:string;createdAt:string;programmeType:string;isDemo:boolean};
 export type AttractionCloudSummary={id:string;updatedAt:string;nameEn:string;nameZh:string;city:string;category:string;tags:string[];aliases:string[]};
 export type CloudTableChange={eventType:'INSERT'|'UPDATE'|'DELETE';new?:CloudRecord;old?:{id?:string}};
 const env=import.meta.env ?? {};
@@ -47,6 +49,31 @@ export async function loadCloudRecords<T>(table:CloudTable):Promise<T[]>{
   }
  }
  return rows.sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).map(row=>row.payload as T);
+}
+const projectSummarySelect='id,updated_at,name:payload->>name,title:payload->>title,destination:payload->>destination,createdAt:payload->>createdAt,programmeType:payload->>programmeType,isDemo:payload->>isDemo';
+let summaryRequest:Promise<ProjectCloudSummary[]>|undefined;
+export function loadCloudProjectSummaries():Promise<ProjectCloudSummary[]>{
+ if(summaryRequest)return summaryRequest;
+ summaryRequest=(async()=>{const all:ProjectCloudSummary[]=[];for(let offset=0;;offset+=500){const {data,error}=await requireClient().from('studio_projects').select(projectSummarySelect).order('id').range(offset,offset+499).abortSignal(AbortSignal.timeout(10000));if(error)throw new Error(`读取方案目录失败：${error.message}`);const rows=(data||[]).map((row:any)=>({id:String(row.id),updatedAt:String(row.updated_at||''),name:String(row.name||''),title:String(row.title||''),destination:String(row.destination||''),createdAt:String(row.createdAt||''),programmeType:String(row.programmeType||''),isDemo:row.isDemo==='true'}));all.push(...rows);if(rows.length<500)break}return all})();
+ void summaryRequest.finally(()=>{summaryRequest=undefined}).catch(()=>{});return summaryRequest;
+}
+const detailRequests=new Map<string,Promise<ProjectData|undefined>>();
+export function loadCloudProjectDetail(id:string):Promise<ProjectData|undefined>{
+ const existing=detailRequests.get(id);if(existing)return existing;
+ const request=(async()=>{const {data,error}=await requireClient().from('studio_projects').select('id,payload,updated_at').eq('id',id).maybeSingle();if(error)throw new Error(`读取方案失败：${error.message}`);return data?{...data.payload as ProjectData,updatedAt:data.updated_at}:undefined})();
+ detailRequests.set(id,request);void request.finally(()=>detailRequests.delete(id)).catch(()=>{});return request;
+}
+export async function saveCloudProjectIfUnchanged(item:ProjectData,expectedUpdatedAt:string|null):Promise<void>{
+ const row={id:item.id,payload:item,updated_at:item.updatedAt};
+ const db=requireClient();
+ if(expectedUpdatedAt===null){
+  const {error}=await db.from('studio_projects').insert(row);
+  if(error){if(error.code==='23505')throw new Error('云端已有同 ID 方案，请核对后重试。');throw new Error(`同步方案失败：${error.message}`)}
+  return;
+ }
+ const {data,error}=await db.from('studio_projects').update({payload:item,updated_at:item.updatedAt}).eq('id',item.id).eq('updated_at',expectedUpdatedAt).select('id');
+ if(error)throw new Error(`同步方案失败：${error.message}`);
+ if(!data?.length)throw new Error('云端方案已被修改或删除；本机修改仍保留，需人工核对冲突。');
 }
 const attractionSummarySelect='id,updated_at,nameEn:payload->>nameEn,nameZh:payload->>nameZh,city:payload->>city,category:payload->>category,tags:payload->tags,aliases:payload->aliases';
 function attractionSummary(row:any):AttractionCloudSummary{return {id:String(row.id),updatedAt:String(row.updated_at||''),nameEn:String(row.nameEn||''),nameZh:String(row.nameZh||''),city:String(row.city||''),category:String(row.category||''),tags:Array.isArray(row.tags)?row.tags.filter((x:unknown)=>typeof x==='string'):[],aliases:Array.isArray(row.aliases)?row.aliases.filter((x:unknown)=>typeof x==='string'):[]};}
