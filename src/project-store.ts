@@ -3,7 +3,7 @@ import type { Clause, ClauseKind, ClauseLanguage } from './clauses';
 import type { Highlight } from './proposal-types';
 import type { SampleClassData } from './sample-class';
 import type { AttractionSnapshot } from './attractions-types';
-import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
+import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords,loadCloudProjectSummaries,loadCloudProjectDetail,saveCloudProjectIfUnchanged,CloudRecordConflictError,type ProjectCloudSummary} from './cloud-store.ts';
 
 export type ProjectData = {
   id:string;
@@ -71,6 +71,10 @@ const REMOVED_EMPTY_DRAFT_IDS=new Set([
 let connection:Promise<IDBDatabase>|undefined;
 let pendingLocalMutation:Promise<unknown>=Promise.resolve();
 let pendingCloudMutation:Promise<unknown>=Promise.resolve();
+const cloudVersions=new Map<string,string>();
+export type ProjectListItem=ProjectData&{summaryOnly?:boolean;cloudUpdatedAt?:string};
+type PendingProject=ProjectData&{__expectedCloudUpdatedAt?:string|null};
+export class ProjectCloudConflictError extends Error{readonly savedLocally=true;constructor(){super('本机方案已保存，但云端版本已被其他同事更新。请备份并核对冲突；不会自动覆盖云端。');this.name='ProjectCloudConflictError'}}
 
 export class ProjectCloudSaveError extends Error{
   readonly savedLocally=true;
@@ -115,17 +119,75 @@ export async function loadLocalProjects():Promise<ProjectData[]> {
     request.onerror=()=>reject(request.error||new Error('无法读取项目'));
   });
 }
+export async function loadLocalProject(id:string):Promise<ProjectData|undefined>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(STORE,'readonly').objectStore(STORE).get(id);request.onsuccess=()=>resolve(request.result as ProjectData|undefined);request.onerror=()=>reject(request.error||new Error('无法读取本机方案'))})}
+async function pendingProject(id:string):Promise<PendingProject|undefined>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(PENDING_PROJECTS,'readonly').objectStore(PENDING_PROJECTS).get(id);request.onsuccess=()=>resolve(request.result as PendingProject|undefined);request.onerror=()=>reject(request.error||new Error('无法读取待同步方案'))})}
+export async function hasPendingProject(id:string):Promise<boolean>{return Boolean(await pendingProject(id))}
+export function localProjectListItem(project:ProjectData):ProjectListItem{
+ return {...blankProject(),id:project.id,name:project.name,title:project.title,createdAt:project.createdAt,updatedAt:project.updatedAt,destination:project.destination,isDemo:project.isDemo,summaryOnly:true};
+}
+export function projectSummaryItem(summary:ProjectCloudSummary,local?:ProjectData):ProjectListItem{
+ const source=local&&local.updatedAt>summary.updatedAt?local:summary;
+ return {...blankProject(),id:source.id,name:source.name,title:source.title,createdAt:source.createdAt,updatedAt:source.updatedAt,destination:source.destination,isDemo:source.isDemo,cloudUpdatedAt:summary.updatedAt,summaryOnly:true};
+}
+export function noteCloudProjectVersion(id:string,updatedAt:string):void{const current=cloudVersions.get(id);if(!current||updatedAt>current)cloudVersions.set(id,updatedAt)}
+let projectListInFlight:Promise<ProjectListItem[]>|undefined;
+export function loadProjectList():Promise<ProjectListItem[]>{
+ if(projectListInFlight)return projectListInFlight;
+ const request=(async()=>{const local=await loadLocalProjects();if(!cloudEnabled)return local.filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(localProjectListItem);const remote=await loadCloudProjectSummaries();const localById=new Map(local.map(item=>[item.id,item]));for(const item of remote)noteCloudProjectVersion(item.id,item.updatedAt);const list=remote.filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(summary=>projectSummaryItem(summary,localById.get(summary.id)));const cloudIds=new Set(remote.map(item=>item.id));return [...list,...local.filter(item=>!cloudIds.has(item.id)&&!REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(localProjectListItem)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))})();
+ projectListInFlight=request.finally(()=>{projectListInFlight=undefined});return projectListInFlight;
+}
+export async function loadProjectDetail(id:string):Promise<ProjectData|undefined>{
+ const [local,pending]=await Promise.all([loadLocalProject(id),pendingProject(id)]);
+ if(!cloudEnabled||pending)return local;
+ const cloudVersion=cloudVersions.get(id);
+ if(local&&(!cloudVersion||local.updatedAt>=cloudVersion))return local;
+ try{
+  const remote=await loadCloudProjectDetail(id);if(!remote)return local;cloudVersions.set(id,remote.updatedAt);
+  // Recheck after the network request: an edit may have been saved locally while
+  // the detail request was in flight. Never replace that newer/pending version.
+  return await reconcileCloudProject(remote)||local;
+ }catch(error){if(local)return local;throw error}
+}
+export function reconcileCloudProject(remote:ProjectData):Promise<ProjectData|undefined>{
+ noteCloudProjectVersion(remote.id,remote.updatedAt);
+ return enqueueLocal(async()=>{
+  const [latest,pending]=await Promise.all([loadLocalProject(remote.id),pendingProject(remote.id)]);
+  if(pending||latest&&latest.updatedAt>=remote.updatedAt)return latest;
+  await saveLocalProjects([remote]);return remote;
+ });
+}
+export async function loadAllProjectsForBackup():Promise<ProjectData[]>{
+ const local=await loadLocalProjects();
+ if(!cloudEnabled)return local;
+ const summaries=await loadCloudProjectSummaries();
+ const localById=new Map(local.map(item=>[item.id,item]));
+ const remote: Array<ProjectData|undefined>=[];
+ for(let offset=0;offset<summaries.length;offset+=4){
+  const batch=await Promise.all(summaries.slice(offset,offset+4).map(async summary=>{
+   noteCloudProjectVersion(summary.id,summary.updatedAt);
+   const [cached,pending]=await Promise.all([Promise.resolve(localById.get(summary.id)),pendingProject(summary.id)]);
+   if(pending){const {__expectedCloudUpdatedAt:_expected,...project}=pending;return project}
+   if(cached&&cached.updatedAt>=summary.updatedAt)return cached;
+   try{return await loadCloudProjectDetail(summary.id)}catch(error){if(cached)return cached;throw error}
+  }));remote.push(...batch);
+ }
+ const merged=new Map<string,ProjectData>();
+ for(const item of remote)if(item&&!REMOVED_EMPTY_DRAFT_IDS.has(item.id))merged.set(item.id,item);
+ for(const item of local)if(!merged.has(item.id)&&!REMOVED_EMPTY_DRAFT_IDS.has(item.id))merged.set(item.id,item);
+ return [...merged.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+}
 async function loadLocalProjectsQuickly():Promise<ProjectData[]>{let timer=0;return Promise.race([loadLocalProjects().catch(()=>[]),new Promise<ProjectData[]>(resolve=>{timer=window.setTimeout(()=>resolve([]),1200)})]).finally(()=>window.clearTimeout(timer))}
 async function readPendingProjectsQuickly():Promise<Map<string,ProjectData>>{let timer=0;return Promise.race([readPendingProjects().catch(()=>new Map<string,ProjectData>()),new Promise<Map<string,ProjectData>>(resolve=>{timer=window.setTimeout(()=>resolve(new Map()),1200)})]).finally(()=>window.clearTimeout(timer))}
 export async function loadProjects():Promise<ProjectData[]> {
   if(!cloudEnabled)return loadLocalProjects();
   let cloudRows:ProjectData[];
   try{cloudRows=await loadCloudRecords<ProjectData>('studio_projects')}catch(error){const local=(await loadLocalProjectsQuickly()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));throw new ProjectCloudLoadError(error,local)}
+  for(const item of cloudRows)cloudVersions.set(item.id,item.updatedAt);
   const removedFromCloud=cloudRows.filter(item=>REMOVED_EMPTY_DRAFT_IDS.has(item.id)).map(item=>item.id);
   const remote=cloudRows.filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
   const local=(await loadLocalProjectsQuickly()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
   if(!remote.length){
-    if(removedFromCloud.length)void enqueueLocal(()=>purgeProjectCache(removedFromCloud)).then(()=>Promise.all(removedFromCloud.map(id=>deleteCloudRecords('studio_projects',[id])))).catch(()=>undefined);
+    if(removedFromCloud.length)void enqueueLocal(()=>purgeProjectCache(removedFromCloud)).catch(()=>undefined);
     return local;
   }
   const pending=new Map([...await readPendingProjectsQuickly()].filter(([id])=>!REMOVED_EMPTY_DRAFT_IDS.has(id)));
@@ -145,7 +207,7 @@ export async function loadProjects():Promise<ProjectData[]> {
   void enqueueLocal(async()=>{await purgeProjectCache([...REMOVED_EMPTY_DRAFT_IDS]);for(const item of needsQueue)await markProjectPending(item);await saveLocalProjects(result)}).catch(()=>undefined);
   // Retry older offline edits in the background; their local copies are already
   // included in the returned list and remain available if the cloud is offline.
-  void (async()=>{for(const id of removedFromCloud)try{await deleteCloudRecords('studio_projects',[id])}catch{}for(const item of pending.values())try{await saveCloudRecords('studio_projects',[item]);await clearProjectPending(item.id)}catch{return}})();
+  if(pending.size)void retryPendingProjects().catch(()=>undefined);
   return result;
 }
 
@@ -154,7 +216,7 @@ async function writeProject(project:ProjectData,queueForCloud=cloudEnabled):Prom
   return new Promise((resolve,reject)=>{
     const tx=db.transaction(queueForCloud?[STORE,PENDING_PROJECTS]:[STORE],'readwrite');
     tx.objectStore(STORE).put(project);
-    if(queueForCloud)tx.objectStore(PENDING_PROJECTS).put(project);
+    if(queueForCloud){const pending=tx.objectStore(PENDING_PROJECTS),request=pending.get(project.id);request.onsuccess=()=>{const previous=request.result as PendingProject|undefined;const expected=previous&&'__expectedCloudUpdatedAt'in previous?previous.__expectedCloudUpdatedAt:cloudVersions.get(project.id)??null;pending.put({...project,__expectedCloudUpdatedAt:expected})}};
     tx.oncomplete=()=>resolve();
     tx.onerror=()=>reject(tx.error||new Error('无法保存项目'));
     tx.onabort=()=>reject(tx.error||new Error('项目保存中断'));
@@ -162,10 +224,21 @@ async function writeProject(project:ProjectData,queueForCloud=cloudEnabled):Prom
 }
 
 async function readPendingProjects():Promise<Map<string,ProjectData>>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(PENDING_PROJECTS,'readonly').objectStore(PENDING_PROJECTS).getAll();request.onsuccess=()=>resolve(new Map((request.result as ProjectData[]).map(item=>[item.id,item])));request.onerror=()=>reject(request.error||new Error('无法读取待同步方案'))})}
-async function markProjectPending(project:ProjectData):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');tx.objectStore(PENDING_PROJECTS).put(project);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法记录待同步方案'))})}
-async function clearProjectPending(id:string,syncedUpdatedAt?:string):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');const store=tx.objectStore(PENDING_PROJECTS);if(syncedUpdatedAt===undefined)store.delete(id);else{const request=store.get(id);request.onsuccess=()=>{const pending=request.result as ProjectData|undefined;if(!pending||pending.updatedAt<=syncedUpdatedAt)store.delete(id)}}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法清除待同步标记'))})}
+async function markProjectPending(project:ProjectData):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');const store=tx.objectStore(PENDING_PROJECTS),request=store.get(project.id);request.onsuccess=()=>{const previous=request.result as PendingProject|undefined;const expected=previous&&'__expectedCloudUpdatedAt'in previous?previous.__expectedCloudUpdatedAt:cloudVersions.get(project.id)??null;store.put({...project,__expectedCloudUpdatedAt:expected})};tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法记录待同步方案'))})}
+async function clearProjectPending(id:string,syncedUpdatedAt?:string):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');const store=tx.objectStore(PENDING_PROJECTS);if(syncedUpdatedAt===undefined)store.delete(id);else{const request=store.get(id);request.onsuccess=()=>{const pending=request.result as PendingProject|undefined;if(!pending||pending.updatedAt<=syncedUpdatedAt)store.delete(id);else store.put({...pending,__expectedCloudUpdatedAt:syncedUpdatedAt})}}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法清除待同步标记'))})}
 export function saveProjectLocally(project:ProjectData):Promise<void>{return enqueueLocal(()=>writeProject(project));}
-export async function saveProject(project:ProjectData):Promise<void>{let localError:unknown;try{await enqueueLocal(()=>writeProject(project))}catch(error){localError=error}if(cloudEnabled)try{await enqueueCloud(async()=>{await saveCloudRecords('studio_projects',[project]);await clearProjectPending(project.id,project.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}if(localError)throw localError;}
+export async function saveProjectCloud(project:ProjectData):Promise<void>{
+ if(!cloudEnabled)return;
+ await enqueueCloud(async()=>{const queued=await pendingProject(project.id);if(!queued||queued.updatedAt!==project.updatedAt)return;let expected=queued.__expectedCloudUpdatedAt;
+  if(expected===undefined){const remote=await loadCloudProjectDetail(project.id);if(remote){if(JSON.stringify(remote)===JSON.stringify(project)){cloudVersions.set(project.id,remote.updatedAt);await clearProjectPending(project.id,project.updatedAt);return}throw new ProjectCloudConflictError()}expected=null}
+  let persistedUpdatedAt:string;
+  try{persistedUpdatedAt=await saveCloudProjectIfUnchanged(project,expected??null)}catch(error){if(error instanceof CloudRecordConflictError)throw new ProjectCloudConflictError();throw new ProjectCloudSaveError(error)}
+  cloudVersions.set(project.id,persistedUpdatedAt);await clearProjectPending(project.id,project.updatedAt);
+  if(persistedUpdatedAt!==project.updatedAt)await enqueueLocal(async()=>{const [latest,pending]=await Promise.all([loadLocalProject(project.id),pendingProject(project.id)]);if(!pending&&latest?.updatedAt===project.updatedAt)await saveLocalProjects([{...latest,updatedAt:persistedUpdatedAt}])});
+ });
+}
+export async function saveProject(project:ProjectData):Promise<void>{await saveProjectLocally(project);await saveProjectCloud(project)}
+export async function retryPendingProjects():Promise<void>{if(!cloudEnabled)return;const pending=await readPendingProjects();for(const item of pending.values()){await saveProjectCloud(item)}}
 
 async function eraseProject(id:string):Promise<void> {
   const db=await database();
@@ -183,5 +256,5 @@ export async function removeProject(id:string):Promise<void>{if(cloudEnabled)awa
 export function getActiveProjectId():string|null {return localStorage.getItem(ACTIVE_KEY);}
 export function setActiveProjectId(id:string):void {localStorage.setItem(ACTIVE_KEY,id);}
 
-async function saveLocalProjects(items:ProjectData[],replace=false,queueForCloud=false):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const stores=queueForCloud&&cloudEnabled?[STORE,PENDING_PROJECTS]:[STORE];const tx=db.transaction(stores,'readwrite');const store=tx.objectStore(STORE);if(replace)store.clear();for(const item of items){store.put(item);if(queueForCloud&&cloudEnabled)tx.objectStore(PENDING_PROJECTS).put(item)}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});}
-export async function saveProjects(items:ProjectData[]):Promise<void>{await enqueueLocal(()=>saveLocalProjects(items,false,true));if(cloudEnabled)try{await enqueueCloud(async()=>{await saveCloudRecords('studio_projects',items);for(const item of items)await clearProjectPending(item.id,item.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}}
+async function saveLocalProjects(items:ProjectData[],replace=false,queueForCloud=false):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const stores=queueForCloud&&cloudEnabled?[STORE,PENDING_PROJECTS]:[STORE];const tx=db.transaction(stores,'readwrite');const store=tx.objectStore(STORE);if(replace)store.clear();for(const item of items){store.put(item);if(queueForCloud&&cloudEnabled){const pending=tx.objectStore(PENDING_PROJECTS),request=pending.get(item.id);request.onsuccess=()=>{const previous=request.result as PendingProject|undefined;const expected=previous&&'__expectedCloudUpdatedAt'in previous?previous.__expectedCloudUpdatedAt:cloudVersions.get(item.id)??null;pending.put({...item,__expectedCloudUpdatedAt:expected})}}}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('恢复失败，未保存任何项目'));tx.onabort=()=>reject(tx.error||new Error('恢复中断，未保存任何项目'));});}
+export async function saveProjects(items:ProjectData[]):Promise<void>{await enqueueLocal(()=>saveLocalProjects(items,false,true));if(cloudEnabled)try{for(const item of items)await saveProjectCloud(item)}catch(error){throw new ProjectCloudSaveError(error)}}

@@ -26,7 +26,7 @@ import {learningDisplay} from './attraction-layout';
 import type { AttractionSnapshot } from './attractions-types';
 import './attractions.css';
 import type { Highlight } from './proposal-types';
-import { blankProject, getActiveProjectId, loadLocalProjects, loadProjects, ProjectLoadError, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectLocally, setActiveProjectId, type ProjectData } from './project-store';
+import { blankProject, getActiveProjectId, hasPendingProject, loadLocalProjects, loadProjectList, loadProjectDetail, loadAllProjectsForBackup, reconcileCloudProject, noteCloudProjectVersion, localProjectListItem, ProjectCloudSaveError, removeProject, saveProjects, saveProject, saveProjectCloud, saveProjectLocally, retryPendingProjects, setActiveProjectId, projectSummaryItem, type ProjectData, type ProjectListItem } from './project-store';
 import './export.css';
 import './studio-ui.css';
 import './workflow-ui.css';
@@ -72,11 +72,13 @@ function App() {
   const [section, setSection] = useState<Section>('Overview');
   const [view, setView] = useState<'cover' | 'overview' | 'highlights' | 'attractions' | 'itinerary' | 'program' | 'sample' | 'pricing' | 'all'>('cover');
   const [project, setProject] = useState<ProjectData>(starterProject);
-  const [projects, setProjects] = useState<ProjectData[]>([]);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading'|'saving'|'saved'|'error'>('loading');
   const [saveError,setSaveError]=useState('');
-  const skipInitialSave=useRef(true);
+  const savedVersions=useRef(new Map<string,string>());
+  const latestProject=useRef(project);latestProject.current=project;
+  const activationToken=useRef(0);
   const [projectListOpen, setProjectListOpen] = useState(false);
   const [libraryOpen,setLibraryOpen]=useState(false);
   const [libraryMode,setLibraryMode]=useState<'manage'|'select'|'replace'>('manage');
@@ -123,59 +125,69 @@ function App() {
   const previewCanvas=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     let active=true;
-    loadProjects().then(async stored=>{
+    void loadLocalProjects().then(async cached=>{
       if(!active)return;
-      const list=stored.length?stored:[starterProject()];
-      if(!stored.length)await saveProject(list[0]);
-      if(!active)return;
-      const activeProject=list.find(item=>item.id===getActiveProjectId());
-      // A blank starter draft should not hide existing work after a refresh.
-      const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||list.find(hasProjectContent)||activeProject||list[0];
-      setProjects(list);setProject(selected);dayArchive.current=selected.archivedDays||selected.days;
-      setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved');
-    }).catch(async error=>{if(active){const cached=error instanceof ProjectLoadError?error.cachedProjects:await loadLocalProjects().catch(()=>[]);if(cached.length){const activeProject=cached.find(item=>item.id===getActiveProjectId());const selected=(activeProject&&hasProjectContent(activeProject)?activeProject:undefined)||cached.find(hasProjectContent)||activeProject||cached[0];setProjects(cached);setProject(selected);setActiveProjectId(selected.id);dayArchive.current=selected.archivedDays||selected.days;}setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error');setHydrated(true);}});
+      const local=cached.filter(item=>item.id);
+      if(local.length){const preferred=local.find(item=>item.id===getActiveProjectId()),selected=(preferred&&hasProjectContent(preferred)?preferred:undefined)||local.find(hasProjectContent)||preferred||local[0];setProjects(local.map(localProjectListItem));setProject(selected);savedVersions.current.set(selected.id,selected.updatedAt);dayArchive.current=selected.archivedDays||selected.days;setActiveProjectId(selected.id);setHydrated(true);setSaveStatus('saved')}
+      try{const list=await loadProjectList();if(!active)return;
+        if(!list.length){if(!local.length){const first=starterProject();await saveProject(first);if(!active)return;setProjects([first]);setProject(first);savedVersions.current.set(first.id,first.updatedAt);setActiveProjectId(first.id);setHydrated(true);setSaveStatus('saved')}return}
+        setProjects(current=>{const byId=new Map(list.map(item=>[item.id,item]));for(const item of current){const found=byId.get(item.id);if(!found||item.updatedAt>found.updatedAt)byId.set(item.id,localProjectListItem(item))}return [...byId.values()].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))});
+        const preferred=list.find(item=>item.id===getActiveProjectId()),selected=preferred||list[0];
+        if(!local.length||(selected as ProjectListItem).summaryOnly){const detail=await loadProjectDetail(selected.id);if(!active||!detail)return;if(latestProject.current.id!==detail.id||latestProject.current.updatedAt<=detail.updatedAt){savedVersions.current.set(detail.id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;setActiveProjectId(detail.id);setSaveStatus('saved');setProject(detail)}if(!local.length)setHydrated(true)}
+        void retryPendingProjects().catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
+      }catch(error){if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}}
+    }).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
     return ()=>{active=false};
   },[]);
   useEffect(()=>{
     if(!hydrated)return;
-    if(skipInitialSave.current){skipInitialSave.current=false;return;}
+    if(savedVersions.current.get(project.id)===project.updatedAt)return;
     let active=true;
     setSaveStatus('saving');
-    void saveProjectLocally(project).then(()=>{if(active&&!cloudEnabled){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}});
-    const timer=cloudEnabled?window.setTimeout(()=>{
-      setProjects(current=>[project,...current.filter(item=>item.id!==project.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
-      saveProject(project).then(()=>{if(active){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}});
-    },350):undefined;
-    return ()=>{active=false;if(timer!==undefined)window.clearTimeout(timer)};
+    const snapshot=project;
+    let localPromise:Promise<void>|undefined;
+    const saveLocal=()=>{localPromise??=saveProjectLocally(snapshot).then(()=>{savedVersions.current.set(snapshot.id,snapshot.updatedAt);setProjects(current=>{const prior=current.find(item=>item.id===snapshot.id);const item=prior&&prior.updatedAt>snapshot.updatedAt?prior:localProjectListItem(snapshot);return [item,...current.filter(existing=>existing.id!==snapshot.id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))});if(active){setSaveError('');setSaveStatus(cloudEnabled?'saving':'saved')}}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}throw error});return localPromise};
+    const localTimer=window.setTimeout(()=>{void saveLocal().catch(()=>undefined)},120);
+    const cloudTimer=cloudEnabled?window.setTimeout(()=>{void saveLocal().then(()=>saveProjectCloud(snapshot)).then(()=>{if(active){setSaveError('');setSaveStatus('saved')}}).catch(error=>{if(active){setSaveError(error instanceof ProjectCloudSaveError?`本机副本已保存；云端同步失败：${error.message}`:error instanceof Error?error.message:String(error));setSaveStatus('error')}})},800):undefined;
+    return ()=>{active=false;window.clearTimeout(localTimer);if(cloudTimer!==undefined)window.clearTimeout(cloudTimer);if(latestProject.current.id!==snapshot.id)void saveLocal().then(()=>cloudEnabled?saveProjectCloud(snapshot):undefined).catch(()=>undefined)};
   },[project,hydrated]);
   useEffect(()=>{
     if(!hydrated||!cloudEnabled)return;
     let active=true;
-    const unsubscribe=subscribeCloudTable('studio_projects',()=>{void loadProjects().then(stored=>{if(!active)return;setProjects(stored);const latest=stored.find(item=>item.id===project.id);if(latest&&latest.updatedAt>project.updatedAt&&saveStatus==='saved')setProject(latest)}).catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})});
-    return()=>{active=false;unsubscribe()};
-  },[hydrated,project.id,project.updatedAt,saveStatus]);
+    const unsubscribe=subscribeCloudTable('studio_projects',change=>{const id=change.eventType==='DELETE'?change.old?.id:change.new?.id;if(!id)return;if(change.eventType==='DELETE'){void hasPendingProject(id).then(pending=>{if(!active)return;if(pending){setSaveError('云端已删除此方案，本机修改已保留，请先备份核对。');setSaveStatus('error')}else setProjects(current=>current.filter(item=>item.id!==id))});return}
+      const row=change.new,payload=row?.payload as Partial<ProjectData>|undefined;if(!row||!payload)return;
+      const summary={id,updatedAt:row.updated_at,name:payload.name||'',title:payload.title||'',createdAt:payload.createdAt||'',destination:payload.destination||'',isDemo:payload.isDemo===true};
+      noteCloudProjectVersion(id,summary.updatedAt);
+      void hasPendingProject(id).then(pending=>{if(!active||pending)return;setProjects(current=>{const prior=current.find(item=>item.id===id);if(prior&&prior.updatedAt>=summary.updatedAt)return current;return [projectSummaryItem(summary,current.find(item=>item.id===id)),...current.filter(item=>item.id!==id)].sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))});if(latestProject.current.id===id&&latestProject.current.updatedAt<summary.updatedAt){const remote={...payload,id,updatedAt:row.updated_at} as ProjectData;void reconcileCloudProject(remote).then(detail=>{if(active&&detail&&latestProject.current.id===id&&latestProject.current.updatedAt<detail.updatedAt){savedVersions.current.set(id,detail.updatedAt);dayArchive.current=detail.archivedDays||detail.days;setProject(detail)}}).catch(()=>undefined)}})
+    });
+    const online=()=>{void retryPendingProjects().catch(error=>{if(active){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})};window.addEventListener('online',online);
+    return()=>{active=false;unsubscribe();window.removeEventListener('online',online)};
+  },[hydrated]);
   const change = (fn: () => void) => fn();
   const activateProject=(next:ProjectData)=>{
     if(projectMenu.current)projectMenu.current.open=false;
-    setProject(next);dayArchive.current=next.archivedDays||next.days;
-    const first=visibleSections(next)[0]||'cover';setSelectedDay(0);setSection(chapterFor[first]);setView(first);setActiveProjectId(next.id);setProjectListOpen(false);setDurationNotice('');setClassMessage('');
+    const token=++activationToken.current;setActiveProjectId(next.id);setProjectListOpen(false);setDurationNotice('');setClassMessage('');
+    const apply=(detail:ProjectData)=>{if(token!==activationToken.current)return;savedVersions.current.set(detail.id,detail.updatedAt);setProject(detail);setProjects(current=>current.map(item=>item.id===detail.id?localProjectListItem(detail):item));dayArchive.current=detail.archivedDays||detail.days;const first=visibleSections(detail)[0]||'cover';setSelectedDay(0);setSection(chapterFor[first]);setView(first);setSaveStatus('saved')};
+    if((next as ProjectListItem).summaryOnly){setSaveStatus('loading');void loadProjectDetail(next.id).then(detail=>{if(!detail)throw new Error('无法读取方案详情');apply(detail)}).catch(error=>{if(token===activationToken.current){setSaveError(error instanceof Error?error.message:String(error));setSaveStatus('error')}})}else apply(next);
   };
   const createProject=()=>{if(projectMenu.current)projectMenu.current.open=false;if(hydrated){setProjectListOpen(false);setCreateOpen(true)}};
-  const finishCreate=(name:string,type:ProgrammeType,sections:DocumentSection[])=>{const next={...blankProject(),name,title:name,programmeType:type,sectionOrder:sections,hiddenSections:[]};setProjects(current=>[next,...current]);activateProject(next);setCreateOpen(false);};
-  const renameProject=(id:string,name:string)=>{
+  const finishCreate=(name:string,type:ProgrammeType,sections:DocumentSection[])=>{const next={...blankProject(),name,title:name,programmeType:type,sectionOrder:sections,hiddenSections:[]};setProjects(current=>[localProjectListItem(next),...current.filter(item=>item.id!==next.id)]);activateProject(next);setCreateOpen(false);};
+  const renameProject=async(id:string,name:string)=>{
     const target=id===project.id?project:projects.find(item=>item.id===id);
     if(!target)return;
     if(!name.trim()||name===target.name)return;
-    const updated={...target,name,updatedAt:new Date().toISOString()};
-    setProjects(current=>current.map(item=>item.id===id?updated:item));
+    const full=(target as ProjectListItem).summaryOnly?await loadProjectDetail(id):target;if(!full)return;
+    const updated={...full,name,updatedAt:new Date().toISOString()};
+    setProjects(current=>current.map(item=>item.id===id?localProjectListItem(updated):item));
     if(id===project.id)setProject(updated);else void saveProject(updated).catch(()=>setSaveStatus('error'));
   };
-  const copyProject=(id:string)=>{
+  const copyProject=async(id:string)=>{
     const target=id===project.id?project:projects.find(item=>item.id===id);
     if(!target)return;
+    const full=(target as ProjectListItem).summaryOnly?await loadProjectDetail(id):target;if(!full)return;
     const now=new Date().toISOString();
-    const copy:ProjectData={...structuredClone(target),id:crypto.randomUUID(),name:`${target.name} 副本`,createdAt:now,updatedAt:now,isDemo:false};
-    setProjects(current=>[copy,...current]);activateProject(copy);
+    const copy:ProjectData={...structuredClone(full),id:crypto.randomUUID(),name:`${full.name} 副本`,createdAt:now,updatedAt:now,isDemo:false};
+    setProjects(current=>[localProjectListItem(copy),...current.filter(item=>item.id!==copy.id)]);activateProject(copy);
   };
   const deleteProject=async(id:string)=>{
     const target=id===project.id?project:projects.find(item=>item.id===id);
@@ -190,7 +202,7 @@ function App() {
   const upload = (file: File | undefined, setter: (url: string) => void) => { if (!file) return; void readImage(file).then(image=>change(()=>setter(image))).catch(error=>window.alert(error instanceof Error?error.message:'图片读取失败')); };
   const resizeDays = (count:number)=>{if(!Number.isInteger(count)||count<1||count>90||count===days.length)return;const archive=[...days,...dayArchive.current.slice(days.length)];dayArchive.current=archive;setProject(current=>({...current,archivedDays:archive,days:Array.from({length:count},(_,i)=>current.days[i]??archive[i]??{title:'',morning:'',afternoon:'',evening:''}),nights:current.nights===current.days.length-1?count-1:Math.min(current.nights,count),updatedAt:new Date().toISOString()}));setSelectedDay(i=>Math.min(i,count-1));setDurationNotice('项目天数已变化；报价及条款均已保留，请重新核对价格、住宿和餐食。');};
   const importDays=(input:ItineraryImport,mode:ImportMode)=>{const updated=applyItineraryImport(project,input,mode);dayArchive.current=updated.archivedDays;setProject(updated);setSelectedDay(0);setItineraryMode('table');if(updated.days.length!==days.length)setDurationNotice('行程天数已变化；报价及全部费用条款均已保留，请重新核对。');};
-  const restoreProjects=async(items:ProjectData[])=>{await saveProjects(items);const stored=await loadProjects();setProjects(stored);const updated=items.find(p=>p.id===project.id);if(updated)activateProject(updated);};
+  const restoreProjects=async(items:ProjectData[])=>{await saveProjects(items);const stored=await loadProjectList();setProjects(stored);const updated=items.find(p=>p.id===project.id);if(updated)activateProject(updated);};
   const changeNights=(value:number)=>{const next=Math.min(days.length,Math.max(0,value));if(next!==nights){setNights(next);setDurationNotice('晚数已变化；费用条款已保留，请核对住宿和餐食。');}};
   const applyClassTemplate=(data:SampleClassData,name:string)=>{
     if(hasClassContent(sampleClass)&&!window.confirm('当前项目已有课程表。确认替换标题、星期列、时间段、课程和备注？其他项目内容及模板库不变。'))return false;
@@ -281,7 +293,7 @@ function App() {
         </section>
       </div>
     </main>
-    {settingsOpen&&<div className="studio-settings-backdrop" onClick={()=>setSettingsOpen(false)}><section className="studio-settings" role="dialog" aria-modal="true" aria-label="设置" onClick={event=>event.stopPropagation()}><header><h2>设置与数据</h2><button onClick={()=>setSettingsOpen(false)}>关闭</button></header><CloudSyncPanel/><details><summary>项目备份与恢复</summary><ProjectBackupPanel projects={[project,...projects.filter(p=>p.id!==project.id)]} onRestore={restoreProjects}/></details><h3>资源库备份</h3><p>独立课表库请在「资源库 → 课程表模板 → 更多」备份。项目备份只包含项目内课表副本。</p><button onClick={()=>{setSettingsOpen(false);setClassLibraryOpen(true)}}>打开课表模板库</button><h3>景点资源备份</h3><p>在景点库右上角「更多」中导出或恢复包含图片的完整资源备份。恢复时会更新同 ID 资料。</p><button onClick={()=>{setSettingsOpen(false);setReplaceAttractionId(null);setLibraryMode('manage');setLibraryOpen(true)}}>打开景点资源库</button><details><summary>当前能力说明</summary><p>内容板块可在章节导航底部管理，隐藏不删除内容。</p><p>顶部可切换专注编辑、分栏预览和全屏预览；分栏时可拖动编辑区右边缘调整宽度。图片与文案较长时，请在导出前检查分页。</p></details></section></div>}
+    {settingsOpen&&<div className="studio-settings-backdrop" onClick={()=>setSettingsOpen(false)}><section className="studio-settings" role="dialog" aria-modal="true" aria-label="设置" onClick={event=>event.stopPropagation()}><header><h2>设置与数据</h2><button onClick={()=>setSettingsOpen(false)}>关闭</button></header><CloudSyncPanel/><details><summary>项目备份与恢复</summary><ProjectBackupPanel projects={[project,...projects.filter(p=>p.id!==project.id)]} loadAllProjects={loadAllProjectsForBackup} onRestore={restoreProjects}/></details><h3>资源库备份</h3><p>独立课表库请在「资源库 → 课程表模板 → 更多」备份。项目备份只包含项目内课表副本。</p><button onClick={()=>{setSettingsOpen(false);setClassLibraryOpen(true)}}>打开课表模板库</button><h3>景点资源备份</h3><p>在景点库右上角「更多」中导出或恢复包含图片的完整资源备份。恢复时会更新同 ID 资料。</p><button onClick={()=>{setSettingsOpen(false);setReplaceAttractionId(null);setLibraryMode('manage');setLibraryOpen(true)}}>打开景点资源库</button><details><summary>当前能力说明</summary><p>内容板块可在章节导航底部管理，隐藏不删除内容。</p><p>顶部可切换专注编辑、分栏预览和全屏预览；分栏时可拖动编辑区右边缘调整宽度。图片与文案较长时，请在导出前检查分页。</p></details></section></div>}
     {attractionLayout.probe}
     <div className="export-stage" ref={exportStage} data-attraction-layout-ready={attractionLayout.ready} aria-hidden="true">{orderedPages.map(page=><div key={page.key} data-section={page.section} className={`export-page ${page.landscape?'landscape':''}`}>{page.content}</div>)}</div>
     {createOpen&&<CreateProjectDialog onClose={()=>setCreateOpen(false)} onCreate={finishCreate}/>}

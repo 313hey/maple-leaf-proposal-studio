@@ -1,10 +1,12 @@
 import {createClient} from '@supabase/supabase-js';
 import type {Attraction} from './attractions-types.ts';
+import type {ProjectData} from './project-store.ts';
 
 type CloudRecord={id:string;payload:unknown;updated_at:string};
 type CloudTable='studio_projects'|'studio_attractions'|'studio_class_templates';
 export type AttractionCloudSummary={id:string;updatedAt:string;nameEn:string;nameZh:string;city:string;category:string;tags:string[];aliases:string[]};
 export type CloudTableChange={eventType:'INSERT'|'UPDATE'|'DELETE';new?:CloudRecord;old?:{id?:string}};
+export type ProjectCloudSummary={id:string;updatedAt:string;name:string;title:string;createdAt:string;destination:string;isDemo:boolean};
 const env=import.meta.env ?? {};
 const url=env.VITE_SUPABASE_URL?.trim()||'';
 const key=env.VITE_SUPABASE_ANON_KEY?.trim()||'';
@@ -49,6 +51,34 @@ export async function loadCloudRecords<T>(table:CloudTable):Promise<T[]>{
  return rows.sort((a,b)=>b.updated_at.localeCompare(a.updated_at)).map(row=>row.payload as T);
 }
 const attractionSummarySelect='id,updated_at,nameEn:payload->>nameEn,nameZh:payload->>nameZh,city:payload->>city,category:payload->>category,tags:payload->tags,aliases:payload->aliases';
+const projectSummarySelect='id,updated_at,name:payload->>name,title:payload->>title,createdAt:payload->>createdAt,destination:payload->>destination,isDemo:payload->>isDemo';
+function projectSummary(row:any):ProjectCloudSummary{return{id:String(row.id),updatedAt:String(row.updated_at||''),name:String(row.name||''),title:String(row.title||''),createdAt:String(row.createdAt||''),destination:String(row.destination||''),isDemo:row.isDemo==='true'}}
+let projectSummaryInFlight:Promise<ProjectCloudSummary[]>|undefined;
+export function loadCloudProjectSummaries():Promise<ProjectCloudSummary[]>{
+ if(projectSummaryInFlight)return projectSummaryInFlight;
+ const request=(async()=>{const db=requireClient(),pageSize=500,all:ProjectCloudSummary[]=[];for(let from=0;;from+=pageSize){const data=await retryCloudQuery(()=>db.from('studio_projects').select(projectSummarySelect).order('id',{ascending:true}).range(from,from+pageSize-1),'读取云端方案目录失败');const rows=(data||[]).map(projectSummary);all.push(...rows);if(rows.length<pageSize)break}return all})();
+ projectSummaryInFlight=request.finally(()=>{projectSummaryInFlight=undefined});return projectSummaryInFlight;
+}
+const projectDetailRequests=new Map<string,Promise<ProjectData|undefined>>();
+export function loadCloudProjectDetail(id:string):Promise<ProjectData|undefined>{
+ const existing=projectDetailRequests.get(id);if(existing)return existing;
+ const request=(async()=>{const data=await retryCloudQuery<CloudRecord>(()=>requireClient().from('studio_projects').select('id,payload,updated_at').eq('id',id).maybeSingle(),'读取云端方案失败');return data?{...data.payload as ProjectData,updatedAt:data.updated_at}:undefined})();
+ projectDetailRequests.set(id,request);void request.finally(()=>projectDetailRequests.delete(id)).catch(()=>{});return request;
+}
+export function nextCloudProjectVersion(projectUpdatedAt:string,expectedUpdatedAt:string|null,now=Date.now()):string{
+ if(expectedUpdatedAt===null)return projectUpdatedAt;
+ return new Date(Math.max(now,Date.parse(projectUpdatedAt),Date.parse(expectedUpdatedAt)+1)).toISOString();
+}
+export async function saveCloudProjectIfUnchanged(project:ProjectData,expectedUpdatedAt:string|null):Promise<string>{
+ const db=requireClient();
+ // A successful compare-and-set must advance the version even when two edits
+ // happen in the same millisecond or the browser clock has not advanced yet.
+ const nextUpdatedAt=nextCloudProjectVersion(project.updatedAt,expectedUpdatedAt);
+ const persisted={...project,updatedAt:nextUpdatedAt},row={id:project.id,payload:persisted,updated_at:nextUpdatedAt};
+ if(expectedUpdatedAt===null){const {error}=await db.from('studio_projects').insert(row);if(error){if(error.code==='23505')throw new CloudRecordConflictError();throw new Error(`保存方案至云端失败：${error.message}`)}return nextUpdatedAt}
+ const {data,error}=await db.from('studio_projects').update({payload:persisted,updated_at:nextUpdatedAt}).eq('id',project.id).eq('updated_at',expectedUpdatedAt).select('id');
+ if(error)throw new Error(`保存方案至云端失败：${error.message}`);if(!data?.length)throw new CloudRecordConflictError();return nextUpdatedAt;
+}
 function attractionSummary(row:any):AttractionCloudSummary{return {id:String(row.id),updatedAt:String(row.updated_at||''),nameEn:String(row.nameEn||''),nameZh:String(row.nameZh||''),city:String(row.city||''),category:String(row.category||''),tags:Array.isArray(row.tags)?row.tags.filter((x:unknown)=>typeof x==='string'):[],aliases:Array.isArray(row.aliases)?row.aliases.filter((x:unknown)=>typeof x==='string'):[]};}
 let attractionSummaryInFlight:Promise<AttractionCloudSummary[]>|undefined;
 export function loadCloudAttractionSummaries():Promise<AttractionCloudSummary[]>{
