@@ -3,7 +3,8 @@ import type { Clause, ClauseKind, ClauseLanguage } from './clauses';
 import type { Highlight } from './proposal-types';
 import type { SampleClassData } from './sample-class';
 import type { AttractionSnapshot } from './attractions-types';
-import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords} from './cloud-store.ts';
+import {cloudEnabled,cloudMigrationComplete,deleteCloudRecords,loadCloudRecords,saveCloudRecords,loadCloudProjectSummaries,loadCloudProjectDetail,saveCloudProjectIfUnchanged,type ProjectCloudSummary} from './cloud-store.ts';
+import {pendingSyncDecision,reconcileProjectDirectory} from './project-reconcile.ts';
 
 export type ProjectData = {
   id:string;
@@ -60,6 +61,8 @@ const STORE='projects';
 const PENDING_PROJECTS='pending-project-sync';
 export const ATTRACTION_STORE='attractions';
 const ACTIVE_KEY='maple-leaf-active-project';
+const KNOWN_CLOUD_KEY='maple-leaf-known-cloud-project-versions-v1';
+const REMOTE_DELETED_KEY='maple-leaf-remote-deleted-project-ids-v1';
 // User-requested cleanup tombstones prevent stale browser sync queues from
 // resurrecting these verified-empty drafts after deletion.
 const REMOVED_EMPTY_DRAFT_IDS=new Set([
@@ -71,6 +74,21 @@ const REMOVED_EMPTY_DRAFT_IDS=new Set([
 let connection:Promise<IDBDatabase>|undefined;
 let pendingLocalMutation:Promise<unknown>=Promise.resolve();
 let pendingCloudMutation:Promise<unknown>=Promise.resolve();
+let pendingRetry:Promise<{synced:number;conflicts:number;failed:number}>|undefined;
+let recentSummaries:ProjectCloudSummary[]|undefined;
+let recentSummariesAt=0;
+const cloudVersions=new Map<string,string>();
+export type ProjectListItem=ProjectData&{summaryOnly?:boolean};
+
+function storedVersions():Record<string,string>{
+ try{const value=localStorage.getItem(KNOWN_CLOUD_KEY);const parsed=value?JSON.parse(value):{};return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}
+}
+function storeVersions(value:Record<string,string>):void{try{localStorage.setItem(KNOWN_CLOUD_KEY,JSON.stringify(value))}catch{}}
+function storedDeletedIds():Set<string>{
+ try{const value=localStorage.getItem(REMOTE_DELETED_KEY);const parsed=value?JSON.parse(value):[];return new Set(Array.isArray(parsed)?parsed.filter((id):id is string=>typeof id==='string'):[])}catch{return new Set()}
+}
+function storeDeletedIds(ids:Set<string>):void{try{localStorage.setItem(REMOTE_DELETED_KEY,JSON.stringify([...ids]))}catch{}}
+function rememberCloudVersion(id:string,updatedAt:string):void{const known=storedVersions();known[id]=updatedAt;storeVersions(known);cloudVersions.set(id,updatedAt)}
 
 export class ProjectCloudSaveError extends Error{
   readonly savedLocally=true;
@@ -110,10 +128,43 @@ export function database():Promise<IDBDatabase> {
 export async function loadLocalProjects():Promise<ProjectData[]> {
   const db=await database();
   return new Promise((resolve,reject)=>{
-    const request=db.transaction(STORE,'readonly').objectStore(STORE).getAll();
-    request.onsuccess=()=>resolve((request.result as ProjectData[]).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)));
-    request.onerror=()=>reject(request.error||new Error('无法读取项目'));
+    const tx=db.transaction([STORE,PENDING_PROJECTS],'readonly');
+    const request=tx.objectStore(STORE).getAll();
+    const pendingKeys=tx.objectStore(PENDING_PROJECTS).getAllKeys();
+    tx.oncomplete=()=>{const deleted=storedDeletedIds(),pending=new Set(pendingKeys.result as string[]);resolve((request.result as ProjectData[]).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id)&&(!deleted.has(item.id)||pending.has(item.id))).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)))};
+    tx.onerror=()=>reject(tx.error||new Error('无法读取项目'));
   });
+}
+async function loadRawLocalProjects():Promise<ProjectData[]>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(STORE,'readonly').objectStore(STORE).getAll();request.onsuccess=()=>resolve(request.result as ProjectData[]);request.onerror=()=>reject(request.error||new Error('无法读取本机项目备份'))})}
+export function projectListItem(item:Pick<ProjectData,'id'|'name'|'title'|'destination'|'createdAt'|'updatedAt'> & Partial<Pick<ProjectData,'programmeType'|'isDemo'>>):ProjectListItem{
+ return {...blankProject(),id:item.id,name:item.name,title:item.title,destination:item.destination,createdAt:item.createdAt,updatedAt:item.updatedAt,programmeType:item.programmeType,isDemo:item.isDemo,summaryOnly:true};
+}
+export async function loadProjectList(cached:ProjectData[]=[]):Promise<ProjectListItem[]>{
+ if(!cloudEnabled)return cached.map(projectListItem);
+ const summaries=(await loadCloudProjectSummaries()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
+ recentSummaries=summaries;recentSummariesAt=Date.now();
+ const pending=await readPendingProjects();
+ const known=storedVersions();
+ const result=reconcileProjectDirectory(cached,summaries,new Set(pending.keys()),new Set(Object.keys(known)),cloudMigrationComplete());
+ const deleted=storedDeletedIds();
+ for(const id of result.remoteDeletedIds){deleted.add(id);cloudVersions.delete(id)}
+ for(const item of summaries){deleted.delete(item.id);cloudVersions.set(item.id,item.updatedAt);if(!pending.has(item.id))known[item.id]=item.updatedAt}
+ storeDeletedIds(deleted);storeVersions(known);
+ for(const item of result.newerLocal)await enqueueLocal(()=>markProjectPending(item));
+ return result.items.map(projectListItem).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+}
+export async function loadProjectDetail(id:string):Promise<ProjectData|undefined>{
+ const db=await database();const read=(store:string)=>new Promise<ProjectData|undefined>((resolve,reject)=>{const request=db.transaction(store,'readonly').objectStore(store).get(id);request.onsuccess=()=>resolve(request.result as ProjectData|undefined);request.onerror=()=>reject(request.error)});
+ const [cached,pending]=await Promise.all([read(STORE),read(PENDING_PROJECTS)]);
+ if(storedDeletedIds().has(id)&&!pending)return undefined;
+ if(!cloudEnabled||pending||cached&&(!cloudVersions.has(id)||cached.updatedAt>=cloudVersions.get(id)!))return cached;
+ try{const remote=await loadCloudProjectDetail(id);if(!remote)return cached;return await enqueueLocal(async()=>{const [latest,queued]=await Promise.all([read(STORE),read(PENDING_PROJECTS)]);if(queued||latest&&latest.updatedAt>=remote.updatedAt)return latest;await saveLocalProjects([remote]);return remote})}catch(error){if(cached)return cached;throw error}
+}
+export async function loadAllProjectsForBackup():Promise<ProjectData[]>{
+ const [local,remote,pending]=await Promise.all([loadRawLocalProjects(),cloudEnabled?loadCloudRecords<ProjectData>('studio_projects'):Promise.resolve([]),readPendingProjects()]);
+ const merged=new Map(remote.map(item=>[item.id,item]));
+ for(const item of local){const cloud=merged.get(item.id);if(pending.has(item.id)||!cloud||item.updatedAt>cloud.updatedAt)merged.set(item.id,item)}
+ return [...merged.values()].filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
 }
 async function loadLocalProjectsQuickly():Promise<ProjectData[]>{let timer=0;return Promise.race([loadLocalProjects().catch(()=>[]),new Promise<ProjectData[]>(resolve=>{timer=window.setTimeout(()=>resolve([]),1200)})]).finally(()=>window.clearTimeout(timer))}
 async function readPendingProjectsQuickly():Promise<Map<string,ProjectData>>{let timer=0;return Promise.race([readPendingProjects().catch(()=>new Map<string,ProjectData>()),new Promise<Map<string,ProjectData>>(resolve=>{timer=window.setTimeout(()=>resolve(new Map()),1200)})]).finally(()=>window.clearTimeout(timer))}
@@ -162,10 +213,40 @@ async function writeProject(project:ProjectData,queueForCloud=cloudEnabled):Prom
 }
 
 async function readPendingProjects():Promise<Map<string,ProjectData>>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(PENDING_PROJECTS,'readonly').objectStore(PENDING_PROJECTS).getAll();request.onsuccess=()=>resolve(new Map((request.result as ProjectData[]).map(item=>[item.id,item])));request.onerror=()=>reject(request.error||new Error('无法读取待同步方案'))})}
+export async function hasPendingProject(id:string):Promise<boolean>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(PENDING_PROJECTS,'readonly').objectStore(PENDING_PROJECTS).getKey(id);request.onsuccess=()=>resolve(request.result!==undefined);request.onerror=()=>reject(request.error||new Error('无法检查方案同步状态'))})}
+export function retryPendingProjects(summaries?:ProjectCloudSummary[]):Promise<{synced:number;conflicts:number;failed:number}>{
+ if(!cloudEnabled)return Promise.resolve({synced:0,conflicts:0,failed:0});
+ if(pendingRetry)return pendingRetry;
+ pendingRetry=(async()=>{
+  const queued=await readPendingProjects();if(!queued.size)return {synced:0,conflicts:0,failed:0};
+  const directory=summaries||(recentSummaries&&Date.now()-recentSummariesAt<5000?recentSummaries:await loadCloudProjectSummaries());
+  const remote=new Map(directory.map(item=>[item.id,item]));
+  const known=storedVersions();let synced=0,conflicts=0,failed=0;
+  for(const item of queued.values()){
+   const cloud=remote.get(item.id),baseline=known[item.id];
+   if(pendingSyncDecision(baseline,cloud?.updatedAt,storedDeletedIds().has(item.id))==='conflict'){
+    conflicts++;continue; // Keep the full pending copy; never recreate a remotely deleted record.
+   }
+   try{
+    await enqueueCloud(async()=>{
+     const latest=(await readPendingProjects()).get(item.id);
+     if(!latest)return;
+     await saveCloudProjectIfUnchanged(latest,baseline||null);
+     rememberCloudVersion(latest.id,latest.updatedAt);
+     await clearProjectPending(latest.id,latest.updatedAt);
+     synced++;
+    });
+   }catch{failed++} // The pending record remains available for another retry or manual recovery.
+  }
+  return {synced,conflicts,failed};
+ })();
+ void pendingRetry.finally(()=>{pendingRetry=undefined}).catch(()=>{});
+ return pendingRetry;
+}
 async function markProjectPending(project:ProjectData):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');tx.objectStore(PENDING_PROJECTS).put(project);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法记录待同步方案'))})}
 async function clearProjectPending(id:string,syncedUpdatedAt?:string):Promise<void>{const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction(PENDING_PROJECTS,'readwrite');const store=tx.objectStore(PENDING_PROJECTS);if(syncedUpdatedAt===undefined)store.delete(id);else{const request=store.get(id);request.onsuccess=()=>{const pending=request.result as ProjectData|undefined;if(!pending||pending.updatedAt<=syncedUpdatedAt)store.delete(id)}}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('无法清除待同步标记'))})}
-export function saveProjectLocally(project:ProjectData):Promise<void>{return enqueueLocal(()=>writeProject(project));}
-export async function saveProject(project:ProjectData):Promise<void>{let localError:unknown;try{await enqueueLocal(()=>writeProject(project))}catch(error){localError=error}if(cloudEnabled)try{await enqueueCloud(async()=>{await saveCloudRecords('studio_projects',[project]);await clearProjectPending(project.id,project.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}if(localError)throw localError;}
+export function saveProjectLocally(project:ProjectData,queueForCloud=cloudEnabled):Promise<void>{return enqueueLocal(()=>writeProject(project,queueForCloud));}
+export async function saveProject(project:ProjectData):Promise<void>{let localError:unknown;try{await enqueueLocal(()=>writeProject(project))}catch(error){localError=error}if(cloudEnabled)try{if(storedDeletedIds().has(project.id))throw new Error('此方案已在另一台设备删除，本机副本仍保留；请复制为新方案后同步。');await enqueueCloud(async()=>{const baseline=storedVersions()[project.id];if(baseline)await saveCloudProjectIfUnchanged(project,baseline);else await saveCloudRecords('studio_projects',[project]);rememberCloudVersion(project.id,project.updatedAt);await clearProjectPending(project.id,project.updatedAt)})}catch(error){throw new ProjectCloudSaveError(error)}if(localError)throw localError;}
 
 async function eraseProject(id:string):Promise<void> {
   const db=await database();
@@ -178,7 +259,7 @@ async function eraseProject(id:string):Promise<void> {
 }
 async function purgeProjectCache(ids:string[]):Promise<void>{if(!ids.length)return;const db=await database();await new Promise<void>((resolve,reject)=>{const tx=db.transaction([STORE,PENDING_PROJECTS],'readwrite');for(const id of ids){tx.objectStore(STORE).delete(id);tx.objectStore(PENDING_PROJECTS).delete(id)}tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('清理已删除草稿缓存失败'))})}
 
-export async function removeProject(id:string):Promise<void>{if(cloudEnabled)await enqueueCloud(()=>deleteCloudRecords('studio_projects',[id]));await enqueueLocal(async()=>{await eraseProject(id);await clearProjectPending(id)});}
+export async function removeProject(id:string):Promise<void>{if(cloudEnabled)await enqueueCloud(()=>deleteCloudRecords('studio_projects',[id]));const deleted=storedDeletedIds();deleted.add(id);storeDeletedIds(deleted);await enqueueLocal(async()=>{await eraseProject(id);await clearProjectPending(id)});}
 
 export function getActiveProjectId():string|null {return localStorage.getItem(ACTIVE_KEY);}
 export function setActiveProjectId(id:string):void {localStorage.setItem(ACTIVE_KEY,id);}
