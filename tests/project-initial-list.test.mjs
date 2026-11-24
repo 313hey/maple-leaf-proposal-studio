@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
-import {blankProject,hasPendingProject,loadAllProjectsForBackup,loadLocalProjects,loadProjectDetail,loadProjectList,projectListItem,saveProjectLocally} from '../src/project-store.ts';
+import {blankProject,hasPendingProject,loadAllProjectsForBackup,loadLocalProjects,loadLocalProjectsForBackup,loadProjectDetail,loadProjectList,projectListItem,saveProjectLocally} from '../src/project-store.ts';
+import {makeProjectBackup,parseProjectBackup} from '../src/project-backup.ts';
 import {pendingSyncDecision,reconcileProjectDirectory} from '../src/project-reconcile.ts';
 
 test('历史方案目录只显示摘要，完整图片和报价仍留在本机方案中',async()=>{
@@ -58,6 +59,26 @@ test('远端删除只隐藏本机缓存，完整备份仍可恢复原项目和�
   assert.equal((await loadLocalProjects()).some(item=>item.id===project.id),false);
   const backup=await loadAllProjectsForBackup();
   assert.equal(backup.find(item=>item.id===project.id)?.coverImage,project.coverImage);
+ }finally{if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous}
+});
+
+test('本机恢复备份保留隐藏的方案、图片和待同步编辑，可再次导入',async()=>{
+ const project={...blankProject(),name:'Offline recovery',coverImage:'data:image/png;base64,preserved',fee:'9000',days:[{title:'',morning:'Edited offline',afternoon:'',evening:''}]};
+ const pendingProject={...blankProject(),name:'Pending offline',coverImage:'data:image/png;base64,queued'};
+ await saveProjectLocally(project,false);
+ await saveProjectLocally(pendingProject,true);
+ const values=new Map([['maple-leaf-remote-deleted-project-ids-v1',JSON.stringify([project.id])]]);
+ const previous=globalThis.localStorage;
+ globalThis.localStorage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
+ try{
+  assert.equal((await loadLocalProjects()).some(item=>item.id===project.id),false);
+  assert.equal(await hasPendingProject(pendingProject.id),true);
+  const local=await loadLocalProjectsForBackup();
+  assert.deepEqual(local.find(item=>item.id===project.id),project);
+  assert.deepEqual(local.find(item=>item.id===pendingProject.id),pendingProject);
+  const restored=parseProjectBackup(await (await makeProjectBackup(local)).text());
+  assert.deepEqual(restored.find(item=>item.id===project.id),project);
+  assert.deepEqual(restored.find(item=>item.id===pendingProject.id),pendingProject);
  }finally{if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous}
 });
 
