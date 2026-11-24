@@ -2,7 +2,7 @@
 
 ## Current priorities
 
-1. **Data recovery clarity:** allow an explicitly local project backup when cloud reads fail. Keep the existing complete cloud plus local backup as the normal path.
+1. **Data recovery clarity (draft PR #3):** allow an explicitly local project backup when cloud reads fail, and ensure queued local saves finish before either backup reads data. Keep the existing complete cloud plus local backup as the normal path.
 2. **Sync confidence:** make pending, failed, and conflicting project edits easy to identify and recover without hiding the local copy.
 3. **Long proposal responsiveness:** profile editing, day switching, and export using representative 21-day projects before changing the save pipeline.
 

@@ -82,6 +82,20 @@ test('本机恢复备份保留隐藏的方案、图片和待同步编辑，可�
  }finally{if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous}
 });
 
+test('本机与完整备份等待已排队的自动保存，避免漏掉刚编辑的方案',async()=>{
+ const first=Array.from({length:25},(_,i)=>({...blankProject(),name:`Queued local ${i}`,coverImage:'data:image/png;base64,latest'}));
+ const localWrites=first.map(item=>saveProjectLocally(item,false));
+ const localBackup=await loadLocalProjectsForBackup();
+ await Promise.all(localWrites);
+ assert.equal(first.filter(item=>localBackup.some(saved=>saved.id===item.id&&saved.coverImage===item.coverImage)).length,first.length);
+
+ const second=Array.from({length:25},(_,i)=>({...blankProject(),name:`Queued complete ${i}`,fee:'12500'}));
+ const completeWrites=second.map(item=>saveProjectLocally(item,false));
+ const completeBackup=await loadAllProjectsForBackup();
+ await Promise.all(completeWrites);
+ assert.equal(second.filter(item=>completeBackup.some(saved=>saved.id===item.id&&saved.fee===item.fee)).length,second.length);
+});
+
 test('空库离线创建可在本机保存，并留下待同步记录',async()=>{
  const project={...blankProject(),name:'Offline starter',title:'Edited while offline'};
  await saveProjectLocally(project,true);
