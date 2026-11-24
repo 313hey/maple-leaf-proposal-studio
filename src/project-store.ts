@@ -136,6 +136,12 @@ export async function loadLocalProjects():Promise<ProjectData[]> {
   });
 }
 async function loadRawLocalProjects():Promise<ProjectData[]>{const db=await database();return new Promise((resolve,reject)=>{const request=db.transaction(STORE,'readonly').objectStore(STORE).getAll();request.onsuccess=()=>resolve(request.result as ProjectData[]);request.onerror=()=>reject(request.error||new Error('无法读取本机项目备份'))})}
+// A recovery export must include cached records hidden after a remote deletion.
+// It never claims to contain proposals that have only ever existed in the cloud.
+export async function loadLocalProjectsForBackup():Promise<ProjectData[]>{
+ await pendingLocalMutation;
+ return (await loadRawLocalProjects()).filter(item=>!REMOVED_EMPTY_DRAFT_IDS.has(item.id));
+}
 export function projectListItem(item:Pick<ProjectData,'id'|'name'|'title'|'destination'|'createdAt'|'updatedAt'> & Partial<Pick<ProjectData,'programmeType'|'isDemo'>>):ProjectListItem{
  return {...blankProject(),id:item.id,name:item.name,title:item.title,destination:item.destination,createdAt:item.createdAt,updatedAt:item.updatedAt,programmeType:item.programmeType,isDemo:item.isDemo,summaryOnly:true};
 }
@@ -161,6 +167,7 @@ export async function loadProjectDetail(id:string):Promise<ProjectData|undefined
  try{const remote=await loadCloudProjectDetail(id);if(!remote)return cached;return await enqueueLocal(async()=>{const [latest,queued]=await Promise.all([read(STORE),read(PENDING_PROJECTS)]);if(queued||latest&&latest.updatedAt>=remote.updatedAt)return latest;await saveLocalProjects([remote]);return remote})}catch(error){if(cached)return cached;throw error}
 }
 export async function loadAllProjectsForBackup():Promise<ProjectData[]>{
+ await pendingLocalMutation;
  const [local,remote,pending]=await Promise.all([loadRawLocalProjects(),cloudEnabled?loadCloudRecords<ProjectData>('studio_projects'):Promise.resolve([]),readPendingProjects()]);
  const merged=new Map(remote.map(item=>[item.id,item]));
  for(const item of local){const cloud=merged.get(item.id);if(pending.has(item.id)||!cloud||item.updatedAt>cloud.updatedAt)merged.set(item.id,item)}
