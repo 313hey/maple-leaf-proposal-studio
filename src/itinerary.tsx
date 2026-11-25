@@ -84,9 +84,9 @@ export function ItinerarySheet({page, pageNumber, dateFor, showDates, destinatio
       const image = day.image && !day.hideImage;
       return <article className={`itinerary-entry ${layout} ${image ? 'has-image' : 'no-image'}`} key={start}>
         <div className="entry-heading"><span>DAY {String(start+1).padStart(2,'0')}{end>start ? `–${String(end+1).padStart(2,'0')}` : ''}</span>{showDates && <small>{dateFor(day,start)}{end>start ? ` – ${dateFor(endDay,end)}` : ''}</small>}</div>
-        {(day.title||day.city) && <h2>{[day.title,day.city].filter(Boolean).join(" · ")}</h2>}
-        {image && <div className="entry-image"><img src={day.image} alt=""/>{showImageWarning&&day.imageSource==='sample' && <span>ILLUSTRATIVE IMAGE · REPLACE BEFORE EXPORT</span>}</div>}
-        <div className="entry-activities">{([['MORNING',day.morning],['AFTERNOON',day.afternoon],['EVENING',day.evening]] as const).filter(([,value])=>value && value!=='—').map(([label,value])=><div key={label}><b>{label}</b><p>{value}</p></div>)}</div>
+        {(day.title||day.city) && <h2 data-edit-target={`itinerary:${start}:title`} tabIndex={0} role="button" aria-label={`点击编辑第${start+1}天主题`}>{[day.title,day.city].filter(Boolean).join(" · ")}</h2>}
+        {image && <div className="entry-image" data-edit-target={`itinerary:${start}:image`} tabIndex={0} role="button" aria-label={`点击编辑第${start+1}天图片`}><img src={day.image} alt=""/>{showImageWarning&&day.imageSource==='sample' && <span>ILLUSTRATIVE IMAGE · REPLACE BEFORE EXPORT</span>}</div>}
+        <div className="entry-activities">{([['MORNING',day.morning,'morning'],['AFTERNOON',day.afternoon,'afternoon'],['EVENING',day.evening,'evening']] as const).filter(([,value])=>value && value!=='—').map(([label,value,field])=><div key={label} data-edit-target={`itinerary:${start}:${field}`} tabIndex={0} role="button" aria-label={`点击编辑第${start+1}天${label}`}><b>{label}</b><p>{value}</p></div>)}</div>
         {(day.breakfast||day.lunch||day.dinner) && <div className="entry-meals">{[['B',day.breakfast],['L',day.lunch],['D',day.dinner]].filter(([,value])=>value).map(([label,value])=><span key={label}>{label} · {value}</span>)}</div>}
       </article>;
     })}</div>

@@ -8,7 +8,7 @@ A study tour specialist uploads a customer brief, cost calculation sheet, and it
 
 | Priority | Product experience | Technical reliability | Evidence needed |
 | --- | --- | --- | --- |
-| Now | Walk through a complete fictional 7–21 day proposal in the browser each day; record confusing entry points, repeated work, preview and PDF issues. | Finish draft PR #3: explicit local backup during cloud failure and complete queued saves before backup. | Screenshots of real screens; steps or measured time; automated and browser test results. |
+| Now | Walk through a complete fictional 7–21 day proposal in the browser each day; record confusing entry points, repeated work, preview and PDF issues. Make common preview content directly editable. | Finish draft PR #3: explicit local backup during cloud failure and complete queued saves before backup. | Before/after screens; preview-to-field actions reduced from chapter navigation + field search to one content click; automated and browser checks. |
 | Next | Reduce the work required to import an itinerary, choose reusable resources, and enter a quotation. Improve one proven friction point at a time without redesigning the entire Studio. | Make pending, failed, and conflicting sync states easy to understand and recover; profile slow 21-day editing before changing saves. | Before/after task completion and click counts; no lost data. |
 | Later | Define structured intake for customer briefs and cost sheets, map it to editable proposal sections, and prototype a reviewed draft flow. | Plan backward-compatible storage and source tracking; assess privacy, accuracy, and cost before any AI integration. | Representative input files, user review, export quality, and explicit approval for high-risk steps. |
 

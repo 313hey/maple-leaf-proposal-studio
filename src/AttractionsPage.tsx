@@ -20,12 +20,12 @@ export function AttractionsPage({items,pageNumber,language='en',documentPage,off
         const description=language==='zh'?item.descriptionZh||item.descriptionEn:item.descriptionEn||item.descriptionZh;
         return <article key={item.id} data-attraction-id={item.id} className={imageFor(item)?'':'without-photo'}>
           <div className="attraction-number">{String((offset??(pageNumber-1)*2)+index+1).padStart(2,'0')}</div>
-          {imageFor(item)&&<div className="attraction-image-frame"><img className="attraction-page-image" src={imageFor(item)} alt={item.nameEn||item.nameZh} style={{objectPosition:`${position.x}% ${position.y}%`}}/></div>}
+          {imageFor(item)&&<div className="attraction-image-frame" data-edit-target={`attraction:${item.id}:image`} tabIndex={0} role="button" aria-label={`点击编辑${item.nameEn||item.nameZh}图片`}><img className="attraction-page-image" src={imageFor(item)} alt={item.nameEn||item.nameZh} style={{objectPosition:`${position.x}% ${position.y}%`}}/></div>}
           <div className="attraction-page-copy">
             <div className="attraction-page-meta">{[item.city,item.country,item.category].filter(Boolean).join(' · ')}</div>
-            <h2>{title}</h2>{secondary&&<small>{secondary}</small>}
-            {description&&<p className="attraction-description">{description}</p>}
-            {(learning.tags.length>0||learning.text)&&<div className="attraction-learning"><strong>{language==='zh'?'研学亮点':'LEARNING HIGHLIGHTS'}</strong>
+            <h2 data-edit-target={`attraction:${item.id}:name`} tabIndex={0} role="button" aria-label={`点击编辑${title}名称`}>{title}</h2>{secondary&&<small>{secondary}</small>}
+            {description&&<p data-edit-target={`attraction:${item.id}:description`} className="attraction-description" tabIndex={0} role="button" aria-label={`点击编辑${title}介绍`}>{description}</p>}
+            {(learning.tags.length>0||learning.text)&&<div className="attraction-learning" data-edit-target={`attraction:${item.id}:highlights`} tabIndex={0} role="button" aria-label={`点击编辑${title}研学亮点`}><strong>{language==='zh'?'研学亮点':'LEARNING HIGHLIGHTS'}</strong>
               {learning.tags.length>0?<ul className="attraction-learning-tags">{learning.tags.map((tag,i)=><li key={i}>{tag}</li>)}</ul>:<p className="attraction-learning-original">{learning.text}</p>}
             </div>}
           </div>
