@@ -14,7 +14,7 @@
 - Added pure mapping regression tests for cover, overview, day and attraction target keys. Existing project data, images, persistence, and export components are unchanged.
 - Validation after implementation: TypeScript check passed; automated tests passed 65/65; production build passed. Browser testing used fictional IndexedDB data on localhost.
 - Limitation: the embedded browser uses a narrow viewport, so split mode is disabled there. It verified editor routing and return-to-preview; desktop split highlighting is implemented but was not visually checked at a wide browser viewport. PDF/Word files were not exported because no proposal-page layout or export code changed.
-- Draft PR: pending creation. No merge, deployment, or production data change.
+- Draft PR: https://github.com/313hey/maple-leaf-proposal-studio/pull/6 (implementation commit 55d57a6ebb02c05108a4bd928f3d136c2519cdfa). No merge, deployment, or production data change.
 
 ## 2026-11-24
 
