@@ -1,5 +1,21 @@
 # Progress Log
 
+## 2026-11-25
+
+### Product experience
+
+- Verified friction: from a proposal preview, locating a title or itinerary field required leaving preview, finding the chapter, and finding the field. Click-to-edit reduces that route to one preview-content click; browser test confirmed the editor opened on the corresponding field. Before/after screenshots were captured in the local browser on the same fictional Shenzhen proposal.
+- Added direct editing for cover/overview text, itinerary topic and activity, and attraction name, description, image, and display highlights. The selected preview content and editor control receive a Maple Leaf red focus outline. A persistent “返回全案预览” action provides a clear route back.
+- Browser check: on an isolated localhost origin, clicked a Day 1 morning activity from full preview, verified the matching day/detail controls and focus, changed its text, and confirmed the full preview immediately reflected the change. Clicked the cover title and verified focus on the project-name field. No production data was accessed.
+- Efficiency: preview-to-field is one click in the new flow versus three navigation/search actions in the previous workflow; this is a control-path count, not a time benchmark.
+
+### Technical reliability
+
+- Added pure mapping regression tests for cover, overview, day and attraction target keys. Existing project data, images, persistence, and export components are unchanged.
+- Validation after implementation: TypeScript check passed; automated tests passed 65/65; production build passed. Browser testing used fictional IndexedDB data on localhost.
+- Limitation: the embedded browser uses a narrow viewport, so split mode is disabled there. It verified editor routing and return-to-preview; desktop split highlighting is implemented but was not visually checked at a wide browser viewport. PDF/Word files were not exported because no proposal-page layout or export code changed.
+- Draft PR: https://github.com/313hey/maple-leaf-proposal-studio/pull/6 (implementation commit 55d57a6ebb02c05108a4bd928f3d136c2519cdfa). No merge, deployment, or production data change.
+
 ## 2026-11-24
 
 ### Product experience

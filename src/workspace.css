@@ -79,3 +79,13 @@
 .class-bottom-actions>.class-add{background:#8a2018;color:white;border-color:#8a2018}
 .class-notes-settings{flex:1;min-width:180px}
 .class-notes label>button{align-self:flex-start;background:none;border:0;color:#9b8275;font-size:10px;padding:4px 0}
+
+/* Click-to-edit stays inside the workspace; exported proposal markup is unchanged. */
+.preview [data-edit-target]{cursor:pointer;transition:outline-color .12s,box-shadow .12s;outline:2px solid transparent;outline-offset:2px;border-radius:2px}
+.preview [data-edit-target]:hover,.preview [data-edit-target]:focus-visible{outline-color:#8a201866}
+.preview .preview-edit-selected{outline-color:#8a2018!important;box-shadow:0 0 0 4px #8a201822}
+.click-edit-help{display:block;margin-top:4px;color:#9b9289;font-size:10px}
+.editor [data-editor-target].editor-edit-selected{outline:2px solid #8a2018!important;outline-offset:4px;border-radius:4px;box-shadow:0 0 0 5px #8a201814}
+.editor .click-edit-banner{position:sticky;top:-30px;z-index:8;display:flex;align-items:center;gap:10px;margin:-30px -28px 18px;padding:11px 16px;background:#fbf4f0;border-bottom:1px solid #ead6ce;color:#784236;font-size:11px}
+.click-edit-banner span{flex:1}.click-edit-banner button{border:1px solid #dec4bb;border-radius:5px;background:#fff;color:#8a2018;padding:7px 10px;font-size:10px;white-space:nowrap}.click-edit-banner .click-edit-dismiss{border:0;background:transparent;color:#937f76;font-size:17px;padding:2px 5px}
+@media(max-width:899px){.editor .click-edit-banner{top:-24px;margin:-24px -20px 16px}}
