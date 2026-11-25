@@ -2,18 +2,24 @@
 
 ## North star
 
-A study tour specialist uploads a customer brief, cost calculation sheet, and itinerary, then reviews and edits a professional proposal before PDF/Word export. Preserve human control over facts, pricing, and client promises. The current Studio supports substantial manual editing and Excel itinerary import; brief and cost-sheet intake and complete draft generation remain future work.
+A study tour specialist uploads client requirements, a costing spreadsheet, and an itinerary; the Studio extracts structured facts, assembles a professional editable proposal from trusted content and layouts, and leaves a clear human review before export. Accuracy of prices, dates, inclusions, and client promises takes precedence over generation speed.
 
 ## Priorities by user value
 
-| Priority | Product experience | Technical reliability | Evidence needed |
+| Priority | Product outcome | Delivery focus | Evidence to advance |
 | --- | --- | --- | --- |
-| Now | Walk through a complete fictional 7–21 day proposal in the browser each day; record confusing entry points, repeated work, preview and PDF issues. | Finish draft PR #3: explicit local backup during cloud failure and complete queued saves before backup. | Screenshots of real screens; steps or measured time; automated and browser test results. |
-| Next | Reduce the work required to import an itinerary, choose reusable resources, and enter a quotation. Improve one proven friction point at a time without redesigning the entire Studio. | Make pending, failed, and conflicting sync states easy to understand and recover; profile slow 21-day editing before changing saves. | Before/after task completion and click counts; no lost data. |
-| Later | Define structured intake for customer briefs and cost sheets, map it to editable proposal sections, and prototype a reviewed draft flow. | Plan backward-compatible storage and source tracking; assess privacy, accuracy, and cost before any AI integration. | Representative input files, user review, export quality, and explicit approval for high-risk steps. |
+| Now | Turn costing workbooks into reliable proposal inputs. | Define a canonical cost model (currency, per-person/group costs, quantities, inclusions, exclusions, assumptions, source cell/file). Build deterministic Excel import with sheet/header detection, field mapping, validation, preview, and explicit confirmation. Keep source values and user overrides traceable. | Representative anonymized workbooks; correct totals and currency; invalid/missing values surfaced; no silent change to current quotations; export and restore compatibility. |
+| Next | Convert client requirements and itinerary into a complete draft structure. | Add structured brief intake and improve itinerary intake; map extracted requirements, days, destinations, group size, learning goals, and constraints to editable proposal sections. Assemble selected attraction/course content and reusable layouts using deterministic rules first. | Side-by-side source-to-proposal traceability; human acceptance/edit rate; completion time versus current manual workflow; PDF/Word visual review. |
+| Later | Add AI assistance where it materially reduces writing work. | Consider extraction of unstructured documents and bilingual drafting after the deterministic pipeline works. Keep price arithmetic, dates, and commitments rule-based. Add source citations, review gates, privacy controls, provider choice, usage limits, and cost estimates before any external model call. | Accuracy on representative held-out files; privacy/security review; measured editing burden; approved API budget and explicit product-owner approval. |
+| Ongoing | Keep the Studio dependable and straightforward for real staff. | Run fictional end-to-end browser walkthroughs; fix high-impact usability and reliability problems; maintain backup, offline recovery, and export compatibility. Prioritize these fixes by impact and frequency, not by novelty. | Task success, steps/time, recoverability, and no regression in existing proposal data. |
 
-## Ongoing discovery
+## Immediate next improvement
 
-At least weekly, compare current public examples from mature SaaS products, Canva, and professional itinerary tools. Record source links, the specific interaction principle, and whether it solves a measured Studio problem. Keep product experience findings distinct from technical defects in `docs/PROGRESS_LOG.md` and reorder this roadmap by actual user value.
+Start with a no-AI costing workbook intake specification and prototype. Collect representative, anonymized workbook shapes; inventory sheet names, headers, formulas, totals, currencies, and common exceptions. Then create an import preview that maps cells to the canonical cost model and blocks ambiguous or invalid totals until the user resolves them. Do not upload customer files to an external service or replace existing quote fields automatically.
 
-Do not migrate or delete production data, merge, or deploy as part of autonomous roadmap work.
+## Product guardrails
+
+- Keep every imported value linked to its source workbook and sheet/cell where practical; distinguish extracted values, calculated values, and user-confirmed overrides.
+- Existing projects remain editable and restorable. New intake must be additive and backward compatible.
+- AI is optional assistance, never the authority for arithmetic or client commitments. No paid AI service, production data migration, merge, or deployment without the required approval.
+- At least weekly, review current public product examples from mature SaaS, Canva, and professional itinerary tools. Record the verified interaction lesson and the Studio problem it addresses.
