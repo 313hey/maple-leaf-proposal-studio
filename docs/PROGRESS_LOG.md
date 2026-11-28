@@ -12,7 +12,7 @@
 
 - Browser automation timed out while applying the timetable template and then became unavailable. No product error, data loss, or production write was observed. This isolated browser did not have a shared cloud library configured; production Supabase was not accessed.
 - TypeScript check passed; all 65 automated tests passed; production build passed. Vite reports the existing large-bundle advisory (942.84 KB itinerary chunk and 1,287.08 KB main chunk). No source code, proposal schema, or customer data changed.
-- PR #7 remains a draft at head `cc7ad22dd24896aae4156f412bf84f2aa47ffa81`: https://github.com/313hey/maple-leaf-proposal-studio/pull/7. This entry records the daily workflow evidence only; the desktop visual acceptance remains outstanding.
+- PR #7 remains a draft: https://github.com/313hey/maple-leaf-proposal-studio/pull/7. This entry records the daily workflow evidence only; the desktop visual acceptance remains outstanding.
 
 ## 2026-11-25
 
