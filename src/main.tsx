@@ -61,14 +61,14 @@ function App() {
   const [structureOpen,setStructureOpen]=useState(false);
   const [durationNotice,setDurationNotice]=useState('');
   const [itineraryMode,setItineraryMode]=useState<'table'|'detail'>('table');
-  const [compactWorkspace,setCompactWorkspace]=useState(()=>window.innerWidth<900);
-  const [workspaceMode,setWorkspaceMode]=useState<'edit'|'split'|'preview'>(()=>{const saved=localStorage.getItem('maple-studio-workspace-mode');return saved==='edit'||saved==='preview'?saved:window.innerWidth<900?'edit':'split'});
+  const [compactWorkspace,setCompactWorkspace]=useState(()=>window.innerWidth<1024);
+  const [workspaceMode,setWorkspaceMode]=useState<'edit'|'split'|'preview'>(()=>{const saved=localStorage.getItem('maple-studio-workspace-mode');return window.innerWidth<1024?'edit':saved==='edit'||saved==='preview'?saved:'split'});
   const [contentLibraryOpen,setContentLibraryOpen]=useState(false);
   const [classLibraryOpen,setClassLibraryOpen]=useState(false),[saveClassOpen,setSaveClassOpen]=useState(false),[classMessage,setClassMessage]=useState('');
   const projectMenu=useRef<HTMLDetailsElement>(null);
   useEffect(()=>{const close=(event:PointerEvent)=>{if(projectMenu.current&&!projectMenu.current.contains(event.target as Node))projectMenu.current.open=false};const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'&&projectMenu.current)projectMenu.current.open=false};document.addEventListener('pointerdown',close);document.addEventListener('keydown',escape);return ()=>{document.removeEventListener('pointerdown',close);document.removeEventListener('keydown',escape)}},[]);
   useEffect(()=>{localStorage.setItem('maple-studio-workspace-mode',workspaceMode)},[workspaceMode]);
-  useEffect(()=>{const media=window.matchMedia('(max-width:899px)');const update=()=>{setCompactWorkspace(media.matches);if(media.matches)setWorkspaceMode(mode=>mode==='split'?'edit':mode)};media.addEventListener('change',update);return ()=>media.removeEventListener('change',update)},[]);
+  useEffect(()=>{const media=window.matchMedia('(max-width:1023px)');const update=()=>{setCompactWorkspace(media.matches);if(media.matches)setWorkspaceMode(mode=>mode==='split'?'edit':mode)};media.addEventListener('change',update);return ()=>media.removeEventListener('change',update)},[]);
   const [settingsOpen,setSettingsOpen]=useState(false);
   const [section, setSection] = useState<Section>('Overview');
   const [view, setView] = useState<'cover' | 'overview' | 'highlights' | 'attractions' | 'itinerary' | 'program' | 'sample' | 'pricing' | 'all'>('cover');
