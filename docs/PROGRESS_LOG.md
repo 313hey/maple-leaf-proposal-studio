@@ -1,5 +1,19 @@
 # Progress Log
 
+## 2026-11-28
+
+### Product experience
+
+- Resumed the fictional local-only “Fictional Shenzhen STEM Exchange” to check the existing workspace and data flow. Re-imported a 7-row, nine-column test itinerary; the confirmation screen showed the exact day/activity/meal fields and stated that pricing, currency, all fee terms, the attraction library, and other proposal sections would be retained. After confirmation, Studio reported: “导入成功，报价与费用条款均已保留。”
+- Verified the project attraction snapshot and its full 50–80 word description remain in the preview. The local attraction picker reported “仅保存在本机” and no available library records, so this environment could not demonstrate selecting a shared attraction. The class-template library did show and preview the fictional five-day timetable; applying it timed out at the browser-control layer, so application was not confirmed.
+- Actual embedded viewport was 699 CSS px, then 787px after requesting 1440px; split mode stayed disabled and the editor used the full available column. The itinerary table could not show all columns in this narrow viewport. No wide-desktop before/after comparison or click/time measurement was completed; there was no interface change in this cycle.
+
+### Technical reliability
+
+- Browser automation timed out while applying the timetable template and then became unavailable. No product error, data loss, or production write was observed. This isolated browser did not have a shared cloud library configured; production Supabase was not accessed.
+- TypeScript check passed; all 65 automated tests passed; production build passed. Vite reports the existing large-bundle advisory (942.84 KB itinerary chunk and 1,287.08 KB main chunk). No source code, proposal schema, or customer data changed.
+- PR #7 remains a draft at head `cc7ad22dd24896aae4156f412bf84f2aa47ffa81`: https://github.com/313hey/maple-leaf-proposal-studio/pull/7. This entry records the daily workflow evidence only; the desktop visual acceptance remains outstanding.
+
 ## 2026-11-25
 
 ### Product experience
